@@ -15,7 +15,7 @@ fs.mkdirSync(TMP_DIR, { recursive: true });
 let cfg = readConfig();
 let polling = false;
 let stopped = false;
-let cachedPrinters = []; // local OS printer names detected right now
+let cachedDiscovered = []; // [{ localPrinterName, protocol, address, model }]
 
 /**
  * First-run flow from spec section 8: register once, get a secret token
@@ -35,30 +35,49 @@ async function ensureRegistered() {
   logger.log('Agent registered and token saved to .env');
 }
 
+/** Printer names conventionally start with the brand - a reasonable,
+ * honest best-effort guess, not a fabricated capability claim. */
+function guessBrand(name) {
+  if (!name) return 'Unknown';
+  const first = name.trim().split(/\s+/)[0];
+  return first || 'Unknown';
+}
+
 async function refreshPrinterList() {
   try {
-    cachedPrinters = await discovery.listPrinters();
-    state.printers = cachedPrinters;
+    cachedDiscovered = await printerService.discoverAll();
+    state.printers = cachedDiscovered.map((d) => d.localPrinterName);
   } catch (err) {
-    logger.log(`Failed to list printers: ${err.message}`);
+    logger.log(`Failed to discover printers: ${err.message}`);
   }
 }
 
-/** Auto-registers every detected local printer as its own addressable
- * Printer record (spec section 7) - nothing to configure by hand. */
+/** Auto-registers every detected printer - Windows-installed or a real
+ * network IPP device found via mDNS - as its own addressable Printer
+ * record (spec sections 7, 9, 34). Nothing to configure by hand. */
 async function registerLocalPrinters() {
-  for (const localName of cachedPrinters) {
-    const printerId = discovery.printerIdFor(cfg.agentId, localName);
+  for (const d of cachedDiscovered) {
+    const printerId = discovery.printerIdFor(cfg.agentId, d.localPrinterName);
+    let capabilities = {};
+    try {
+      capabilities = await printerService.getCapabilities(d);
+    } catch (err) {
+      logger.log(`Could not read capabilities for "${d.localPrinterName}": ${err.message}`);
+    }
     try {
       await cloud.registerPrinter({
         printerId,
-        name: localName,
+        name: d.localPrinterName,
+        brand: guessBrand(d.model || d.localPrinterName),
+        model: d.model || 'Unknown',
         location: '',
-        localPrinterName: localName,
-        capabilities: {},
+        localPrinterName: d.localPrinterName,
+        protocol: d.protocol,
+        address: d.address,
+        capabilities,
       });
     } catch (err) {
-      logger.log(`Failed to register printer "${localName}": ${err.message}`);
+      logger.log(`Failed to register printer "${d.localPrinterName}": ${err.message}`);
     }
   }
 }
@@ -100,10 +119,28 @@ async function handleJob(job) {
     return;
   }
 
-  // The backend resolves job.printerId to the exact local OS printer name
-  // server-side (see routes/printJobs.js), so the agent never has to guess.
-  if (!job.localPrinterName || !cachedPrinters.includes(job.localPrinterName)) {
-    logger.log(`Configured printer was not found ("${job.localPrinterName || '(none)'}")`);
+  // A mobile user may have cancelled between claim and now - never print
+  // a job that's already been called off (spec section 18/28).
+  try {
+    const currentStatus = await cloud.getJobStatus(job.jobId);
+    if (currentStatus === 'cancelled') {
+      logger.log(`Job ${job.jobId} was cancelled - skipping print.`);
+      cleanup(tmpPath);
+      return;
+    }
+  } catch (err) {
+    logger.log(`Warning: could not verify job wasn't cancelled (${err.message})`);
+  }
+
+  // The backend resolves job.printerId to the exact protocol/address/local
+  // name server-side (see routes/printJobs.js), so the agent never guesses.
+  const printer = { protocol: job.protocol || 'windows', localPrinterName: job.localPrinterName, address: job.address };
+  const printerReady = job.protocol === 'windows' || job.protocol === undefined
+    ? !!job.localPrinterName && cachedDiscovered.some((d) => d.localPrinterName === job.localPrinterName)
+    : !!job.address;
+
+  if (!printerReady || !(await printerService.validate(printer).catch(() => false))) {
+    logger.log(`Configured printer was not found ("${job.localPrinterName || job.address || '(none)'}")`);
     await reportFailure(job.jobId, 'Configured printer was not found.');
     cleanup(tmpPath);
     state.lastPrintStatus = 'Failed';
@@ -117,11 +154,12 @@ async function handleJob(job) {
   }
 
   try {
-    logger.log(`Printing to "${job.localPrinterName}"...`);
-    await printerService.printFile(tmpPath, {
-      printerName: job.localPrinterName,
+    logger.log(`Printing to "${job.localPrinterName}" (${printer.protocol})...`);
+    await printerService.printFile(tmpPath, printer, {
       copies: job.copies,
       color: job.color,
+      paperSize: job.paperSize,
+      duplex: job.duplex,
     });
     logger.log('Print completed');
 
@@ -143,9 +181,10 @@ async function pollOnce() {
   polling = true;
   try {
     cfg = readConfig();
+    const printerNames = cachedDiscovered.map((d) => d.localPrinterName);
 
     try {
-      await cloud.heartbeat(cachedPrinters, '1.0.0');
+      await cloud.heartbeat(printerNames, '1.0.0');
       state.backendConnected = true;
     } catch (err) {
       state.backendConnected = false;
@@ -196,7 +235,7 @@ async function start() {
   startDashboard({
     getConfig: () => cfg,
     state,
-    getCachedPrinters: () => cachedPrinters,
+    getCachedPrinters: () => cachedDiscovered.map((d) => d.localPrinterName),
   });
 
   scheduleLoop();

@@ -1,7 +1,6 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const discovery = require('../printer-discovery');
 const printerService = require('../printer-service');
 const { buildTestPdf } = require('../utils/testPdf');
 const logger = require('../utils/logger');
@@ -9,12 +8,13 @@ const logger = require('../utils/logger');
 const TMP_DIR = path.join(__dirname, '..', 'tmp');
 
 /**
- * Local dashboard + local printer utilities (spec section 25 dashboard,
+ * Local dashboard + local printer utilities (spec section 25/32 dashboard,
  * section 26 Test Print). Runs on http://localhost:<port> only - never
  * exposed to the internet, matching the "no public printer ports" rule.
- * Every printer this agent detects is auto-registered with the cloud
- * backend (see agent.js), so there's no manual "select default printer"
- * step here anymore - this page is status + diagnostics only.
+ * Every printer this agent detects - Windows-installed or a real network
+ * IPP device - is auto-registered with the cloud backend (see agent.js),
+ * so there's no manual "select default printer" step here anymore; this
+ * page is status + diagnostics only.
  */
 function startDashboard({ getConfig, state, getCachedPrinters }) {
   const app = express();
@@ -37,10 +37,10 @@ function startDashboard({ getConfig, state, getCachedPrinters }) {
     });
   });
 
-  // GET /api/printers - refresh + return the live local printer list
+  // GET /api/printers - refresh + return the live local + network printer list
   app.get('/api/printers', async (req, res) => {
     try {
-      const printers = await discovery.listPrinters();
+      const printers = await printerService.discoverAll();
       res.json({ success: true, printers });
     } catch (err) {
       logger.log(`Failed to list printers: ${err.message}`);
@@ -48,22 +48,25 @@ function startDashboard({ getConfig, state, getCachedPrinters }) {
     }
   });
 
-  // POST /api/test-print { printerName } - spec section 26
+  // POST /api/test-print { localPrinterName } - spec section 26
   app.post('/api/test-print', async (req, res) => {
-    const { printerName } = req.body || {};
-    if (!printerName) {
-      return res.status(400).json({ success: false, error: 'printerName is required.' });
+    const { localPrinterName } = req.body || {};
+    if (!localPrinterName) {
+      return res.status(400).json({ success: false, error: 'localPrinterName is required.' });
     }
-    const exists = await discovery.printerExists(printerName);
-    if (!exists) {
+
+    const discovered = await printerService.discoverAll();
+    const printer = discovered.find((d) => d.localPrinterName === localPrinterName);
+    if (!printer || !(await printerService.validate(printer).catch(() => false))) {
       return res.status(400).json({ success: false, error: 'Configured printer was not found.' });
     }
+
     fs.mkdirSync(TMP_DIR, { recursive: true });
     const testPath = path.join(TMP_DIR, 'test-print.pdf');
     try {
       fs.writeFileSync(testPath, buildTestPdf('Remote Print Agent - Test Page'));
-      logger.log(`Sending test page to "${printerName}"...`);
-      await printerService.printFile(testPath, { printerName, copies: 1, color: false });
+      logger.log(`Sending test page to "${localPrinterName}" (${printer.protocol})...`);
+      await printerService.printFile(testPath, printer, { copies: 1, color: false });
       logger.log('Test print completed.');
       res.json({ success: true, message: 'Test print completed.' });
     } catch (err) {

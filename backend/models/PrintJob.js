@@ -9,11 +9,18 @@ const printJobSchema = new mongoose.Schema(
     // Set once a job is assigned - null while queued and eligible for any
     // agent that serves printerId.
     agentId: { type: String, default: null },
+    // Who submitted this job - used to authorize cancellation and for the
+    // audit log. Null for jobs created outside a user context (e.g. the
+    // admin panel's own test-print button).
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     fileUrl: { type: String, required: true },
     fileName: { type: String, default: null },
     fileSize: { type: Number, default: null },
     copies: { type: Number, default: 1, min: 1, max: 50 },
     color: { type: Boolean, default: false },
+    paperSize: { type: String, default: 'A4' },
+    orientation: { type: String, enum: ['portrait', 'landscape'], default: 'portrait' },
+    duplex: { type: Boolean, default: false },
     status: { type: String, enum: STATUSES, default: 'queued' },
     attempts: { type: Number, default: 0 },
     maxRetries: { type: Number, default: 3 },

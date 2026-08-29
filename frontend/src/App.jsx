@@ -3,11 +3,12 @@ import PrintTest from './components/PrintTest';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import Settings from './components/Settings';
+import Compatibility from './components/Compatibility';
 import { getToken, getUser, clearToken } from './api';
 
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken());
-  const [view, setView] = useState('print'); // 'print' | 'admin' | 'settings'
+  const [view, setView] = useState('print'); // 'print' | 'admin' | 'settings' | 'compatibility'
   const user = getUser();
 
   function handleLogout() {
@@ -30,12 +31,15 @@ export default function App() {
         <AdminPanel onBack={() => setView('print')} />
       ) : view === 'settings' ? (
         <Settings onBack={() => setView('print')} />
+      ) : view === 'compatibility' ? (
+        <Compatibility onBack={() => setView('print')} />
       ) : (
         <PrintTest
           onLogout={handleLogout}
           isAdmin={user?.role === 'admin'}
           onOpenAdmin={() => setView('admin')}
           onOpenSettings={() => setView('settings')}
+          onOpenCompatibility={() => setView('compatibility')}
         />
       )}
     </div>

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { getPrintJob } from '../api';
+import { cancelPrintJob, getPrintJob } from '../api';
+
+const CANCELLABLE_STATES = ['queued', 'assigned', 'downloading'];
 
 const STEPS = [
   { key: 'queued', label: 'Job Created' },
@@ -14,6 +16,7 @@ const STEP_INDEX = { queued: 0, assigned: 1, downloading: 2, printing: 3, comple
 export default function JobStatus({ jobId, onReset }) {
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
+  const [cancelling, setCancelling] = useState(false);
   const timerRef = useRef(null);
 
   useEffect(() => {
@@ -46,6 +49,19 @@ export default function JobStatus({ jobId, onReset }) {
   const isFailed = job && (job.status === 'failed' || job.status === 'cancelled');
   const isCompleted = job && job.status === 'completed';
   const currentIndex = job && !isFailed ? STEP_INDEX[job.status] : -1;
+  const canCancel = job && CANCELLABLE_STATES.includes(job.status);
+
+  async function handleCancel() {
+    setCancelling(true);
+    try {
+      await cancelPrintJob(jobId);
+      setJob((prev) => (prev ? { ...prev, status: 'cancelled' } : prev));
+    } catch (err) {
+      setError(err.response?.data?.error || 'Could not cancel this job.');
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   return (
     <div className="status-card">
@@ -57,8 +73,8 @@ export default function JobStatus({ jobId, onReset }) {
       {isFailed ? (
         <div className="result failed">
           <div className="result-icon">✕</div>
-          <div className="result-title">PRINT FAILED</div>
-          <div className="result-detail">{job.error || 'Printer may be offline.'}</div>
+          <div className="result-title">{job.status === 'cancelled' ? 'PRINT CANCELLED' : 'PRINT FAILED'}</div>
+          {job.status !== 'cancelled' && <div className="result-detail">{job.error || 'Printer may be offline.'}</div>}
         </div>
       ) : isCompleted ? (
         <div className="result success">
@@ -78,6 +94,12 @@ export default function JobStatus({ jobId, onReset }) {
 
       {error && <div className="hint error">{error}</div>}
       {!isFailed && !isCompleted && <div className="hint">Waiting for PC...</div>}
+
+      {canCancel && (
+        <button className="link-btn" onClick={handleCancel} disabled={cancelling}>
+          {cancelling ? 'Cancelling...' : 'Cancel print'}
+        </button>
+      )}
 
       <button className="link-btn" onClick={onReset}>
         ← New test print

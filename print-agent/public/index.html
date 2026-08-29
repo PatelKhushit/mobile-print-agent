@@ -138,12 +138,12 @@ function setMsg(text) {
   document.getElementById('msg').textContent = text;
 }
 
-async function testPrint(printerName) {
-  setMsg(`Sending test page to "${printerName}"...`);
+async function testPrint(localPrinterName) {
+  setMsg(`Sending test page to "${localPrinterName}"...`);
   const res = await fetch('/api/test-print', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ printerName }),
+    body: JSON.stringify({ localPrinterName }),
   });
   const data = await res.json();
   setMsg(data.success ? data.message : data.error);

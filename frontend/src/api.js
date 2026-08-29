@@ -69,7 +69,7 @@ export async function uploadPdf(file, onProgress) {
   return data; // { success, fileUrl, fileName, fileSize }
 }
 
-export async function createPrintJob({ printerId, fileUrl, copies, color }) {
+export async function createPrintJob({ printerId, fileUrl, copies, color, paperSize, duplex }) {
   const idempotencyKey =
     (window.crypto?.randomUUID && window.crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
   const { data } = await client.post('/api/print-jobs', {
@@ -77,6 +77,8 @@ export async function createPrintJob({ printerId, fileUrl, copies, color }) {
     fileUrl,
     copies,
     color,
+    paperSize,
+    duplex,
     idempotencyKey,
   });
   return data; // { success, jobId, status }
@@ -85,6 +87,16 @@ export async function createPrintJob({ printerId, fileUrl, copies, color }) {
 export async function getPrintJob(jobId) {
   const { data } = await client.get(`/api/print-jobs/${jobId}`);
   return data.job;
+}
+
+export async function cancelPrintJob(jobId) {
+  const { data } = await client.post(`/api/print-jobs/${jobId}/cancel`);
+  return data; // { success, jobId, status }
+}
+
+export async function getAuditLog(limit = 100) {
+  const { data } = await client.get('/api/print-jobs/admin/audit-log', { params: { limit } });
+  return data.entries;
 }
 
 export async function getAvailablePrinters() {

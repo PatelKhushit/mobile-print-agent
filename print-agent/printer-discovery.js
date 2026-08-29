@@ -47,6 +47,25 @@ async function printerExists(printerName) {
   return printers.includes(printerName);
 }
 
+/**
+ * Real per-printer detail from Win32_Printer: driver name (used to guess
+ * brand), the printer's own advertised paper sizes, and Windows's own
+ * offline/status flags. Note WorkOffline/PrinterStatus reflect what
+ * Windows *thinks*, not necessarily physical reality - SumatraPDF (what
+ * printer-service.js actually uses to print) talks to the driver directly
+ * and has printed successfully here even while WorkOffline was true, so
+ * these are surfaced as diagnostic info, not used to block printing.
+ */
+async function getPrinterDetails(printerName) {
+  const escaped = printerName.replace(/'/g, "''");
+  const result = await runPowerShellJson(
+    `Get-CimInstance Win32_Printer -Filter "Name='${escaped}'" | ` +
+      'Select-Object DriverName,WorkOffline,PrinterStatus,PrinterPaperNames | ConvertTo-Json -Compress'
+  );
+  if (!result) return null;
+  return Array.isArray(result) ? result[0] : result;
+}
+
 /** Deterministic, stable printerId derived from agent + local printer name -
  * same value every run, so registered printers and existing print jobs
  * referencing them stay valid across agent restarts. */
@@ -61,4 +80,4 @@ function printerIdFor(agentId, localPrinterName) {
   return `${slugify(agentId)}-${slugify(localPrinterName)}`;
 }
 
-module.exports = { listPrinters, defaultPrinterName, printerExists, printerIdFor };
+module.exports = { listPrinters, defaultPrinterName, printerExists, printerIdFor, getPrinterDetails };

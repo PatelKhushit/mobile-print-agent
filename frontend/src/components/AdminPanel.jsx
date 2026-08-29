@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { adminDeletePrinter, adminListPrinters, adminTestPrint, adminUpdatePrinter } from '../api';
+import {
+  adminDeletePrinter,
+  adminListPrinters,
+  adminTestPrint,
+  adminUpdatePrinter,
+  getAuditLog,
+} from '../api';
 
 const STATUS_LABEL = {
   online: '🟢 Online',
@@ -8,10 +14,19 @@ const STATUS_LABEL = {
   disabled: '⚪ Disabled',
 };
 
+const RESULT_LABEL = {
+  completed: '✓ Completed',
+  failed: '✕ Failed',
+  cancelled: '⊘ Cancelled',
+};
+
 export default function AdminPanel({ onBack }) {
   const [printers, setPrinters] = useState([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState('');
+  const [auditLog, setAuditLog] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(true);
+  const [showAudit, setShowAudit] = useState(false);
 
   async function load() {
     try {
@@ -23,11 +38,28 @@ export default function AdminPanel({ onBack }) {
     }
   }
 
+  async function loadAuditLog() {
+    try {
+      setAuditLog(await getAuditLog(100));
+    } catch {
+      // Non-critical panel - printer table above still works if this fails.
+    } finally {
+      setAuditLoading(false);
+    }
+  }
+
   useEffect(() => {
     load();
     const timer = setInterval(load, 10000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!showAudit) return undefined;
+    loadAuditLog();
+    const timer = setInterval(loadAuditLog, 10000);
+    return () => clearInterval(timer);
+  }, [showAudit]);
 
   async function handleRename(printer) {
     const name = window.prompt('New name for this printer:', printer.name);
@@ -102,6 +134,45 @@ export default function AdminPanel({ onBack }) {
       )}
 
       {msg && <div className="hint">{msg}</div>}
+
+      <button className="link-btn" onClick={() => setShowAudit((v) => !v)}>
+        {showAudit ? 'Hide audit log' : 'Show audit log'}
+      </button>
+
+      {showAudit && (
+        <>
+          {auditLoading ? (
+            <div className="hint">Loading audit log...</div>
+          ) : auditLog.length === 0 ? (
+            <div className="hint">No print activity recorded yet.</div>
+          ) : (
+            <div className="admin-table-wrap">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>User</th>
+                    <th>Printer</th>
+                    <th>Copies</th>
+                    <th>Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditLog.map((entry) => (
+                    <tr key={entry._id}>
+                      <td>{new Date(entry.createdAt).toLocaleString()}</td>
+                      <td>{entry.userEmail || '—'}</td>
+                      <td>{entry.printerName || entry.printerId}</td>
+                      <td>{entry.copies}</td>
+                      <td title={entry.error || ''}>{RESULT_LABEL[entry.status] || entry.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
 
       <button className="link-btn" onClick={onBack}>
         ← Back

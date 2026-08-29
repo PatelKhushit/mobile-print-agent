@@ -7,6 +7,7 @@ const { agentAuth, jwtAuth, requireAdmin } = require('../middleware/auth');
 const logger = require('../src/utils/logger');
 
 const ONLINE_WINDOW_MS = 90000; // agent heartbeats every ~5s; generous margin
+const SUPPORTED_PROTOCOLS = ['windows', 'ipp', 'ipps'];
 
 const router = express.Router();
 
@@ -15,14 +16,20 @@ const router = express.Router();
  * An agent declares a printer it can serve (spec section 7). printerId is
  * globally unique - re-registering from a different agent than the one
  * that owns it is rejected rather than silently reassigning someone else's
- * printer.
+ * printer. protocol defaults to "windows" (driver-based) since that's what
+ * every USB/LPT/virtual printer needs; agents that discover real network
+ * printers pass "ipp"/"ipps" explicitly along with an address.
  */
 router.post('/register', agentAuth, async (req, res) => {
-  const { printerId, name, location, localPrinterName, capabilities } = req.body || {};
+  const { printerId, name, brand, model, location, localPrinterName, protocol, address, capabilities } =
+    req.body || {};
   if (!printerId || !name || !localPrinterName) {
     return res
       .status(400)
       .json({ success: false, error: 'printerId, name, and localPrinterName are required.' });
+  }
+  if (protocol && !SUPPORTED_PROTOCOLS.includes(protocol)) {
+    return res.status(400).json({ success: false, error: `Unsupported protocol "${protocol}".` });
   }
 
   const existing = await Printer.findOne({ printerId });
@@ -35,16 +42,20 @@ router.post('/register', agentAuth, async (req, res) => {
     {
       printerId,
       name,
+      brand: brand || 'Unknown',
+      model: model || 'Unknown',
       location: location || '',
       agentId: req.agentId,
       localPrinterName,
+      protocol: protocol || 'windows',
+      address: address || null,
       status: 'online',
       capabilities: capabilities || {},
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
-  logger.info(`[printers] ${printer.printerId} registered to ${req.agentId} (${localPrinterName})`);
+  logger.info(`[printers] ${printer.printerId} registered to ${req.agentId} (${localPrinterName}, ${printer.protocol})`);
   res.json({ success: true, printer });
 });
 
@@ -57,6 +68,20 @@ async function computeStatus(printer, agentsById) {
   return 'online';
 }
 
+function publicPrinter(p, status) {
+  return {
+    printerId: p.printerId,
+    name: p.name,
+    brand: p.brand,
+    model: p.model,
+    location: p.location,
+    agentId: p.agentId,
+    protocol: p.protocol,
+    capabilities: p.capabilities,
+    status,
+  };
+}
+
 // GET /api/printers - mobile printer picker
 router.get('/', async (req, res) => {
   const printers = await Printer.find({ status: { $ne: 'disabled' } }).lean();
@@ -64,15 +89,7 @@ router.get('/', async (req, res) => {
   const agents = await Agent.find({ agentId: { $in: agentIds } }).lean();
   const agentsById = new Map(agents.map((a) => [a.agentId, a]));
 
-  const result = await Promise.all(
-    printers.map(async (p) => ({
-      printerId: p.printerId,
-      name: p.name,
-      location: p.location,
-      agentId: p.agentId,
-      status: await computeStatus(p, agentsById),
-    }))
-  );
+  const result = await Promise.all(printers.map(async (p) => publicPrinter(p, await computeStatus(p, agentsById))));
   res.json({ success: true, printers: result });
 });
 
@@ -86,6 +103,18 @@ router.get('/:printerId/status', async (req, res) => {
   res.json({ success: true, printerId: printer.printerId, status });
 });
 
+// GET /api/printers/:printerId/capabilities
+router.get('/:printerId/capabilities', async (req, res) => {
+  const printer = await Printer.findOne({ printerId: req.params.printerId }).lean();
+  if (!printer) return res.status(404).json({ success: false, error: 'Printer not found.' });
+  res.json({
+    success: true,
+    printerId: printer.printerId,
+    protocol: printer.protocol,
+    capabilities: printer.capabilities,
+  });
+});
+
 // GET /api/printers/admin/all - admin panel view, includes disabled printers
 router.get('/admin/all', jwtAuth, requireAdmin, async (req, res) => {
   const printers = await Printer.find({}).lean();
@@ -95,12 +124,9 @@ router.get('/admin/all', jwtAuth, requireAdmin, async (req, res) => {
 
   const result = await Promise.all(
     printers.map(async (p) => ({
-      printerId: p.printerId,
-      name: p.name,
-      location: p.location,
-      agentId: p.agentId,
+      ...publicPrinter(p, await computeStatus(p, agentsById)),
       localPrinterName: p.localPrinterName,
-      status: await computeStatus(p, agentsById),
+      address: p.address,
     }))
   );
   res.json({ success: true, printers: result });
@@ -140,6 +166,7 @@ router.post('/:printerId/test-print', jwtAuth, requireAdmin, async (req, res) =>
     fileUrl: `${config.publicBaseUrl}/public/sample-test-page.pdf`,
     copies: 1,
     color: false,
+    userId: req.user.sub,
   });
   logger.info(`[printers] Admin test print ${job.jobId} -> ${printer.printerId}`);
   res.status(201).json({ success: true, jobId: job.jobId, status: job.status });

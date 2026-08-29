@@ -3,15 +3,24 @@ const axios = require('axios');
 const config = require('../src/config');
 const Printer = require('../models/Printer');
 const PrintJob = require('../models/PrintJob');
+const AuditLog = require('../models/AuditLog');
+const User = require('../models/User');
 const printQueue = require('../services/printQueue');
-const { agentAuth, jwtAuth } = require('../middleware/auth');
+const { agentAuth, jwtAuth, requireAdmin } = require('../middleware/auth');
 const logger = require('../src/utils/logger');
 
 const router = express.Router();
 
+// GET /api/print-jobs/admin/audit-log - who printed what, where, and when
+router.get('/admin/audit-log', jwtAuth, requireAdmin, async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+  const entries = await AuditLog.find({}).sort({ createdAt: -1 }).limit(limit).lean();
+  res.json({ success: true, entries });
+});
+
 // POST /api/print-jobs - mobile creates a print job (requires login)
 router.post('/', jwtAuth, async (req, res) => {
-  const { printerId, fileUrl, copies, color, idempotencyKey } = req.body || {};
+  const { printerId, fileUrl, copies, color, paperSize, orientation, duplex, idempotencyKey } = req.body || {};
 
   if (!fileUrl || typeof fileUrl !== 'string' || !/^https?:\/\//i.test(fileUrl)) {
     return res.status(400).json({ success: false, error: 'A valid fileUrl (http/https) is required.' });
@@ -49,6 +58,10 @@ router.post('/', jwtAuth, async (req, res) => {
     fileUrl,
     copies: copiesNum,
     color: !!color,
+    paperSize,
+    orientation,
+    duplex: !!duplex,
+    userId: req.user.sub,
     idempotencyKey: idempotencyKey || null,
   });
 
@@ -74,8 +87,13 @@ router.get('/pending', agentAuth, async (req, res) => {
       fileUrl: job.fileUrl,
       copies: job.copies,
       color: job.color,
+      paperSize: job.paperSize,
+      orientation: job.orientation,
+      duplex: job.duplex,
       printerId: job.printerId,
       localPrinterName: printer ? printer.localPrinterName : null,
+      protocol: printer ? printer.protocol : 'windows',
+      address: printer ? printer.address : null,
     },
   });
 });
@@ -98,6 +116,35 @@ router.post('/:jobId/claim', agentAuth, async (req, res) => {
   job.attempts += 1;
   await job.save();
   res.json({ success: true, jobId: job.jobId, status: job.status });
+});
+
+// POST /api/print-jobs/:jobId/cancel - mobile cancels its own job (or admin cancels any)
+router.post('/:jobId/cancel', jwtAuth, async (req, res) => {
+  const result = await printQueue.cancelJob(req.params.jobId, req.user.sub, req.user.role === 'admin');
+  if (result.error === 'not_found') return res.status(404).json({ success: false, error: 'Job not found.' });
+  if (result.error === 'forbidden') {
+    return res.status(403).json({ success: false, error: 'You can only cancel your own print jobs.' });
+  }
+  if (result.error === 'invalid_state') {
+    return res
+      .status(409)
+      .json({ success: false, error: `Cannot cancel - job is already "${result.job.status}".` });
+  }
+
+  const printer = await Printer.findOne({ printerId: result.job.printerId }).lean();
+  await AuditLog.create({
+    jobId: result.job.jobId,
+    userId: result.job.userId,
+    userEmail: req.user.email,
+    printerId: result.job.printerId,
+    printerName: printer ? printer.name : result.job.printerId,
+    agentId: result.job.agentId,
+    copies: result.job.copies,
+    status: 'cancelled',
+  });
+
+  logger.info(`[print-jobs] ${result.job.jobId} cancelled by ${req.user.email}`);
+  res.json({ success: true, jobId: result.job.jobId, status: result.job.status });
 });
 
 // GET /api/print-jobs/:jobId - mobile polls status
@@ -126,10 +173,27 @@ router.post('/:jobId/printing', agentAuth, async (req, res) => {
   handleTransitionResult(res, await printQueue.markPrinting(req.params.jobId, req.agentId));
 });
 
+async function writeAuditEntry(job, status, error) {
+  const printer = await Printer.findOne({ printerId: job.printerId }).lean();
+  const user = job.userId ? await User.findById(job.userId).lean() : null;
+  await AuditLog.create({
+    jobId: job.jobId,
+    userId: job.userId,
+    userEmail: user ? user.email : null,
+    printerId: job.printerId,
+    printerName: printer ? printer.name : job.printerId,
+    agentId: job.agentId,
+    copies: job.copies,
+    status,
+    error: error || null,
+  });
+}
+
 router.post('/:jobId/complete', agentAuth, async (req, res) => {
   const result = await printQueue.markCompleted(req.params.jobId, req.agentId);
   if (result.job && result.job.status === 'completed') {
     logger.info(`[print-jobs] ${result.job.jobId} completed by ${req.agentId}`);
+    await writeAuditEntry(result.job, 'completed');
   }
   handleTransitionResult(res, result);
 });
@@ -139,6 +203,9 @@ router.post('/:jobId/fail', agentAuth, async (req, res) => {
   const result = await printQueue.markFailed(req.params.jobId, req.agentId, error);
   if (result.job) {
     logger.warn(`[print-jobs] ${result.job.jobId} ${result.job.status} (attempt ${result.job.attempts}): ${error}`);
+    if (result.job.status === 'failed') {
+      await writeAuditEntry(result.job, 'failed', error);
+    }
   }
   handleTransitionResult(res, result);
 });

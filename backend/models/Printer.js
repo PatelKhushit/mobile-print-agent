@@ -4,16 +4,29 @@ const printerSchema = new mongoose.Schema(
   {
     printerId: { type: String, required: true, unique: true },
     name: { type: String, required: true },
+    brand: { type: String, default: 'Unknown' },
+    model: { type: String, default: 'Unknown' },
     location: { type: String, default: '' },
     agentId: { type: String, required: true },
     // Exact OS-level printer name the agent should pass to its print
     // command - never assumed, always explicit (spec section 16: "Do NOT
     // assume the printer name").
     localPrinterName: { type: String, required: true },
+    // How the agent talks to this device. "windows" = OS print subsystem
+    // (driver-based, works for USB/LPT/virtual printers). "ipp"/"ipps" =
+    // direct network protocol, no driver install needed. Selecting the
+    // wrong adapter for a printer is a real failure, not a fallback - see
+    // printer-service.js on the agent.
+    protocol: { type: String, enum: ['windows', 'ipp', 'ipps'], default: 'windows' },
+    // Only set for network printers (protocol ipp/ipps) - the agent needs
+    // this to reach the device directly, independent of localPrinterName.
+    address: { type: String, default: null },
     status: { type: String, enum: ['online', 'offline', 'disabled'], default: 'offline' },
     capabilities: {
       color: { type: Boolean, default: false },
       duplex: { type: Boolean, default: false },
+      paperSizes: { type: [String], default: [] },
+      resolution: { type: String, default: '' },
     },
   },
   { timestamps: true }

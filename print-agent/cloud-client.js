@@ -23,11 +23,11 @@ async function heartbeat(printers, version) {
   );
 }
 
-async function registerPrinter({ printerId, name, location, localPrinterName, capabilities }) {
+async function registerPrinter({ printerId, name, brand, model, location, localPrinterName, protocol, address, capabilities }) {
   const cfg = readConfig();
   await axios.post(
     `${cfg.backendUrl}/api/printers/register`,
-    { printerId, name, location, localPrinterName, capabilities },
+    { printerId, name, brand, model, location, localPrinterName, protocol, address, capabilities },
     { headers: authHeaders(cfg), timeout: cfg.requestTimeout }
   );
 }
@@ -78,11 +78,20 @@ async function downloadFile(url, timeout) {
   return response.data;
 }
 
+/** Used to check for a mobile-initiated cancel between download and print
+ * (spec section 18: never print a job that's already been cancelled). */
+async function getJobStatus(jobId) {
+  const cfg = readConfig();
+  const { data } = await axios.get(`${cfg.backendUrl}/api/print-jobs/${jobId}`, { timeout: cfg.requestTimeout });
+  return data.job.status;
+}
+
 module.exports = {
   register,
   heartbeat,
   registerPrinter,
   getPendingJob,
+  getJobStatus,
   markDownloading,
   markPrinting,
   markCompleted,

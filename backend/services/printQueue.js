@@ -16,7 +16,19 @@ function generateJobId() {
  * under concurrent duplicate requests: only one insert wins, the loser
  * re-reads the winner.
  */
-async function createJob({ printerId, fileUrl, fileName, fileSize, copies, color, idempotencyKey }) {
+async function createJob({
+  printerId,
+  fileUrl,
+  fileName,
+  fileSize,
+  copies,
+  color,
+  paperSize,
+  orientation,
+  duplex,
+  userId,
+  idempotencyKey,
+}) {
   if (idempotencyKey) {
     const existing = await PrintJob.findOne({ idempotencyKey });
     if (existing) return existing;
@@ -30,6 +42,10 @@ async function createJob({ printerId, fileUrl, fileName, fileSize, copies, color
     fileSize: fileSize || null,
     copies: copies || 1,
     color: !!color,
+    paperSize: paperSize || 'A4',
+    orientation: orientation || 'portrait',
+    duplex: !!duplex,
+    userId: userId || null,
     // Omit entirely rather than passing null - see the schema comment on
     // why that matters for the sparse unique index.
     ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -141,6 +157,28 @@ async function markFailed(jobId, agentId, errorMessage) {
   return { job };
 }
 
+/**
+ * Cancels a job the requester owns (or any job, if the requester is an
+ * admin) - but only while it's still safe to do so. Once an agent has
+ * told us it's actively printing, cancelling is refused rather than
+ * pretending to stop a page that may already be coming out of the
+ * printer (spec: never fake a result).
+ */
+async function cancelJob(jobId, requesterId, isAdmin) {
+  const job = await PrintJob.findOne({ jobId });
+  if (!job) return { error: 'not_found' };
+  if (!isAdmin && (!job.userId || job.userId.toString() !== requesterId)) {
+    return { error: 'forbidden' };
+  }
+  if (!['queued', 'assigned', 'downloading'].includes(job.status)) {
+    return { error: 'invalid_state', job };
+  }
+  job.status = 'cancelled';
+  job.completedAt = new Date();
+  await job.save();
+  return { job };
+}
+
 module.exports = {
   createJob,
   getJob,
@@ -149,4 +187,5 @@ module.exports = {
   markPrinting,
   markCompleted,
   markFailed,
+  cancelJob,
 };

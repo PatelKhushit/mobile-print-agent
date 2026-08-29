@@ -8,12 +8,14 @@ const STATUS_LABEL = {
   offline: '🔴 Offline',
 };
 
-export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettings }) {
+export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettings, onOpenCompatibility }) {
   const [printerId, setPrinterId] = useState('');
   const [printers, setPrinters] = useState([]);
   const [printersLoaded, setPrintersLoaded] = useState(false);
   const [copies, setCopies] = useState(1);
   const [color, setColor] = useState(false);
+  const [paperSize, setPaperSize] = useState('');
+  const [duplex, setDuplex] = useState(false);
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState('Waiting...');
   const [busy, setBusy] = useState(false);
@@ -54,6 +56,20 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
   }
 
   const selectedPrinter = printers.find((p) => p.printerId === printerId);
+  const caps = selectedPrinter?.capabilities || {};
+  const supportsColor = !!caps.color;
+  const supportsDuplex = !!caps.duplex;
+  const paperSizes = Array.isArray(caps.paperSizes) && caps.paperSizes.length ? caps.paperSizes : null;
+
+  // Never offer an option the printer hasn't actually reported supporting -
+  // reset selections whenever the chosen printer (or its known capabilities) changes.
+  useEffect(() => {
+    if (!supportsColor && color) setColor(false);
+    if (!supportsDuplex && duplex) setDuplex(false);
+    if (paperSizes && !paperSizes.includes(paperSize)) setPaperSize(paperSizes[0]);
+    if (!paperSizes && paperSize) setPaperSize('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [printerId, caps.color, caps.duplex, paperSizes && paperSizes.join('|')]);
 
   async function handleTestPrint() {
     if (!printerId) {
@@ -74,7 +90,14 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
       }
 
       setStatus('Creating print job...');
-      const result = await createPrintJob({ printerId, fileUrl, copies, color });
+      const result = await createPrintJob({
+        printerId,
+        fileUrl,
+        copies,
+        color: supportsColor && color,
+        paperSize: paperSizes ? paperSize : undefined,
+        duplex: supportsDuplex && duplex,
+      });
       setJobId(result.jobId);
       setStatus('Waiting for print agent...');
     } catch (err) {
@@ -111,7 +134,16 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
         {printersLoaded && printers.length === 0 && (
           <small>No printers registered yet. Start a Print Agent to register one.</small>
         )}
-        {selectedPrinter && <small>{STATUS_LABEL[selectedPrinter.status] || selectedPrinter.status}</small>}
+        {selectedPrinter && (
+          <small>
+            {STATUS_LABEL[selectedPrinter.status] || selectedPrinter.status}
+            {' · '}
+            {selectedPrinter.brand && selectedPrinter.brand !== 'Unknown' ? `${selectedPrinter.brand} · ` : ''}
+            {selectedPrinter.protocol === 'ipp' || selectedPrinter.protocol === 'ipps'
+              ? `Network (${selectedPrinter.protocol.toUpperCase()})`
+              : 'Driver-connected'}
+          </small>
+        )}
       </label>
 
       <label className="field">
@@ -129,11 +161,39 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
 
       <label className="field">
         <span>Color</span>
-        <select value={color ? 'color' : 'bw'} onChange={(e) => setColor(e.target.value === 'color')}>
+        <select
+          value={color ? 'color' : 'bw'}
+          onChange={(e) => setColor(e.target.value === 'color')}
+          disabled={!selectedPrinter || !supportsColor}
+        >
           <option value="bw">B&amp;W</option>
           <option value="color">Color</option>
         </select>
+        {selectedPrinter && !supportsColor && <small>This printer only reports black &amp; white support.</small>}
       </label>
+
+      {paperSizes && (
+        <label className="field">
+          <span>Paper Size</span>
+          <select value={paperSize} onChange={(e) => setPaperSize(e.target.value)}>
+            {paperSizes.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {supportsDuplex && (
+        <label className="field">
+          <span>Duplex (double-sided)</span>
+          <select value={duplex ? 'duplex' : 'simplex'} onChange={(e) => setDuplex(e.target.value === 'duplex')}>
+            <option value="simplex">Single-sided</option>
+            <option value="duplex">Double-sided</option>
+          </select>
+        </label>
+      )}
 
       <label className="field">
         <span>Document</span>
@@ -166,6 +226,9 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
         )}
         <button className="link-btn" onClick={onOpenSettings}>
           Settings
+        </button>
+        <button className="link-btn" onClick={onOpenCompatibility}>
+          Printer Compatibility
         </button>
         <button className="link-btn" onClick={onLogout}>
           Sign out

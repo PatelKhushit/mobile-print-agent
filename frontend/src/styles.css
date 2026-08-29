@@ -279,3 +279,34 @@ h1 {
 .admin-actions button:hover {
   background: var(--border);
 }
+
+.compat-intro {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.compat-heading {
+  font-size: 13px;
+  color: var(--text);
+  margin: 20px 0 8px;
+}
+
+.compat-list {
+  margin: 0 0 8px;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.compat-list li { margin-bottom: 6px; }
+
+.compat-list code {
+  background: #0d0f14;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
