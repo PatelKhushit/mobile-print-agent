@@ -27,6 +27,10 @@ const agentRegistry = new AgentRegistry();
 
 const app = express();
 app.disable('x-powered-by');
+// Render (and most PaaS hosts) sit one reverse-proxy hop in front of this
+// app and set X-Forwarded-For. Without this, express-rate-limit throws on
+// every request instead of trusting the client IP it derives from that header.
+app.set('trust proxy', 1);
 app.use(
   cors({
     origin: config.corsOrigin === '*' ? true : config.corsOrigin.split(',').map((s) => s.trim()),

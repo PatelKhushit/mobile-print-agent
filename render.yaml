@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: mobile-print-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: MAX_FILE_SIZE_MB
+        value: 10
+      - key: JOB_CLAIM_TIMEOUT_MS
+        value: 120000
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 60000
+      - key: RATE_LIMIT_MAX
+        value: 120
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: AGENT_CREDENTIALS
+        sync: false
