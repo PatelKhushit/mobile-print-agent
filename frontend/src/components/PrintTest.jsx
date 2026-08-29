@@ -56,6 +56,8 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
   }
 
   const selectedPrinter = printers.find((p) => p.printerId === printerId);
+  const onlinePrinters = printers.filter((p) => p.status === 'online');
+  const otherPrinters = printers.filter((p) => p.status !== 'online');
   const caps = selectedPrinter?.capabilities || {};
   const supportsColor = !!caps.color;
   const supportsDuplex = !!caps.duplex;
@@ -125,11 +127,24 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
         <span>Printer</span>
         <select value={printerId} onChange={(e) => setPrinterId(e.target.value)}>
           <option value="">Select a printer...</option>
-          {printers.map((p) => (
-            <option key={p.printerId} value={p.printerId}>
-              {p.name} {p.location ? `(${p.location})` : ''}
-            </option>
-          ))}
+          {onlinePrinters.length > 0 && (
+            <optgroup label="Available">
+              {onlinePrinters.map((p) => (
+                <option key={p.printerId} value={p.printerId}>
+                  {p.name} {p.location ? `(${p.location})` : ''}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {otherPrinters.length > 0 && (
+            <optgroup label="Unavailable">
+              {otherPrinters.map((p) => (
+                <option key={p.printerId} value={p.printerId}>
+                  {p.name} {p.location ? `(${p.location})` : ''} — {p.status}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
         {printersLoaded && printers.length === 0 && (
           <small>No printers registered yet. Start a Print Agent to register one.</small>

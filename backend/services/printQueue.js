@@ -72,6 +72,14 @@ function getJob(jobId) {
  * crashed mid-job). Jobs that have already exhausted their retry budget
  * are marked permanently failed instead of being requeued forever (spec
  * section 23: "Never retry indefinitely").
+ *
+ * Jobs already in "printing" are the one exception: at that point the
+ * agent has handed the document to the Windows print subsystem, so if it
+ * then goes silent we can no longer tell whether the page actually came
+ * out. Requeuing would risk printing it a second time - a real physical
+ * duplicate, not just a retried API call - so those are marked failed
+ * instead, never silently retried (spec section 24: duplicate print
+ * protection must hold across an agent crash/restart).
  */
 async function releaseExpiredClaims(claimTimeoutMs) {
   const cutoff = new Date(Date.now() - claimTimeoutMs);
@@ -81,7 +89,12 @@ async function releaseExpiredClaims(claimTimeoutMs) {
   });
 
   for (const job of stuck) {
-    if (job.attempts >= job.maxRetries) {
+    if (job.status === 'printing') {
+      job.status = 'failed';
+      job.error = 'Print agent went silent while this job was printing - outcome could not be confirmed, so it was not retried automatically to avoid a duplicate physical print. Check the printer and reprint manually if needed.';
+      job.completedAt = new Date();
+      logger.warn(`[printQueue] ${job.jobId} failed without retry - was mid-print when its claim expired`);
+    } else if (job.attempts >= job.maxRetries) {
       job.status = 'failed';
       job.error = 'Exceeded retry limit after repeated timeouts.';
       job.completedAt = new Date();

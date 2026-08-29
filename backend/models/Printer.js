@@ -22,6 +22,10 @@ const printerSchema = new mongoose.Schema(
     // this to reach the device directly, independent of localPrinterName.
     address: { type: String, default: null },
     status: { type: String, enum: ['online', 'offline', 'disabled'], default: 'offline' },
+    // Updated on every agent sync - independent of Agent.lastSeenAt, which
+    // only tells us the agent process is alive, not that this specific
+    // printer was still present in its most recent discovery scan.
+    lastSeenAt: { type: Date, default: null },
     capabilities: {
       color: { type: Boolean, default: false },
       duplex: { type: Boolean, default: false },

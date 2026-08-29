@@ -45,17 +45,30 @@ function guessBrand(name) {
 
 async function refreshPrinterList() {
   try {
-    cachedDiscovered = await printerService.discoverAll();
+    const discovered = await printerService.discoverAll();
+    const previousNames = new Set(cachedDiscovered.map((d) => d.localPrinterName));
+    const currentNames = new Set(discovered.map((d) => d.localPrinterName));
+    for (const name of currentNames) {
+      if (!previousNames.has(name)) logger.log(`New printer detected: "${name}"`);
+    }
+    for (const name of previousNames) {
+      if (!currentNames.has(name)) logger.log(`Printer no longer detected: "${name}"`);
+    }
+    cachedDiscovered = discovered;
     state.printers = cachedDiscovered.map((d) => d.localPrinterName);
   } catch (err) {
-    logger.log(`Failed to discover printers: ${err.message}`);
+    logger.log(`Printer discovery failed: ${err.message}`);
   }
 }
 
 /** Auto-registers every detected printer - Windows-installed or a real
  * network IPP device found via mDNS - as its own addressable Printer
- * record (spec sections 7, 9, 34). Nothing to configure by hand. */
+ * record (spec sections 7, 9, 34), in one batched sync call rather than
+ * one HTTP round-trip per printer. Nothing to configure by hand. */
 async function registerLocalPrinters() {
+  if (!cachedDiscovered.length) return;
+
+  const printers = [];
   for (const d of cachedDiscovered) {
     const printerId = discovery.printerIdFor(cfg.agentId, d.localPrinterName);
     let capabilities = {};
@@ -64,21 +77,22 @@ async function registerLocalPrinters() {
     } catch (err) {
       logger.log(`Could not read capabilities for "${d.localPrinterName}": ${err.message}`);
     }
-    try {
-      await cloud.registerPrinter({
-        printerId,
-        name: d.localPrinterName,
-        brand: guessBrand(d.model || d.localPrinterName),
-        model: d.model || 'Unknown',
-        location: '',
-        localPrinterName: d.localPrinterName,
-        protocol: d.protocol,
-        address: d.address,
-        capabilities,
-      });
-    } catch (err) {
-      logger.log(`Failed to register printer "${d.localPrinterName}": ${err.message}`);
-    }
+    printers.push({
+      printerId,
+      name: d.localPrinterName,
+      brand: guessBrand(d.model || d.localPrinterName),
+      model: d.model || 'Unknown',
+      localPrinterName: d.localPrinterName,
+      protocol: d.protocol,
+      address: d.address,
+      capabilities,
+    });
+  }
+
+  try {
+    await cloud.syncPrinters(printers);
+  } catch (err) {
+    logger.log(`Failed to sync printers with backend: ${err.message}`);
   }
 }
 

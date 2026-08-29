@@ -2,7 +2,13 @@ const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 
-const ENV_PATH = path.join(__dirname, '.env');
+// AGENT_ENV_FILE lets a second agent process (e.g. a local test run against
+// this same directory) point its persisted token at its own file instead of
+// silently overwriting a different agent's real .env - see print-agent's
+// README and the shared-.env incident notes for why this matters.
+const ENV_PATH = process.env.AGENT_ENV_FILE
+  ? path.resolve(process.env.AGENT_ENV_FILE)
+  : path.join(__dirname, '.env');
 dotenv.config({ path: ENV_PATH });
 
 function readConfig() {

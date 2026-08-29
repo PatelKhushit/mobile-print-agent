@@ -37,26 +37,77 @@ router.post('/register', agentAuth, async (req, res) => {
     return res.status(409).json({ success: false, error: 'printerId is already registered to a different agent.' });
   }
 
+  // name/location are admin-owned once a printer exists (spec section 32:
+  // a custom display name must survive the agent's periodic re-sync) - set
+  // only on first insert via $setOnInsert, never overwritten on repeat syncs.
   const printer = await Printer.findOneAndUpdate(
     { printerId },
     {
-      printerId,
-      name,
-      brand: brand || 'Unknown',
-      model: model || 'Unknown',
-      location: location || '',
-      agentId: req.agentId,
-      localPrinterName,
-      protocol: protocol || 'windows',
-      address: address || null,
-      status: 'online',
-      capabilities: capabilities || {},
+      $set: {
+        brand: brand || 'Unknown',
+        model: model || 'Unknown',
+        agentId: req.agentId,
+        localPrinterName,
+        protocol: protocol || 'windows',
+        address: address || null,
+        status: 'online',
+        capabilities: capabilities || {},
+        lastSeenAt: new Date(),
+      },
+      $setOnInsert: { printerId, name, location: location || '' },
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
   logger.info(`[printers] ${printer.printerId} registered to ${req.agentId} (${localPrinterName}, ${printer.protocol})`);
   res.json({ success: true, printer });
+});
+
+/**
+ * POST /api/printers/sync
+ * Bulk version of /register (spec section 7/10): the agent sends its whole
+ * discovered printer list in one call each periodic sync instead of one
+ * HTTP round-trip per printer. Same upsert semantics as /register - name/
+ * location are admin-owned and never overwritten after first insert.
+ */
+router.post('/sync', agentAuth, async (req, res) => {
+  const { printers } = req.body || {};
+  if (!Array.isArray(printers)) {
+    return res.status(400).json({ success: false, error: 'printers must be an array.' });
+  }
+
+  const results = [];
+  for (const p of printers) {
+    const { printerId, name, brand, model, localPrinterName, protocol, address, capabilities } = p || {};
+    if (!printerId || !name || !localPrinterName) continue;
+    if (protocol && !SUPPORTED_PROTOCOLS.includes(protocol)) continue;
+
+    const existing = await Printer.findOne({ printerId });
+    if (existing && existing.agentId !== req.agentId) continue; // owned by another agent, skip rather than hijack
+
+    const printer = await Printer.findOneAndUpdate(
+      { printerId },
+      {
+        $set: {
+          brand: brand || 'Unknown',
+          model: model || 'Unknown',
+          agentId: req.agentId,
+          localPrinterName,
+          protocol: protocol || 'windows',
+          address: address || null,
+          status: 'online',
+          capabilities: capabilities || {},
+          lastSeenAt: new Date(),
+        },
+        $setOnInsert: { printerId, name, location: '' },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    results.push(printer.printerId);
+  }
+
+  logger.info(`[printers] Synced ${results.length} printer(s) for ${req.agentId}`);
+  res.json({ success: true, synced: results });
 });
 
 async function computeStatus(printer, agentsById) {

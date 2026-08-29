@@ -19,6 +19,16 @@ Print per printer, live logs).
 
 Logs are written to `logs/agent.log` and mirrored in the dashboard.
 
+## Auto-start on Windows logon
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-startup.ps1
+```
+
+Registers a Scheduled Task (`RemotePrintAgent`) that runs the agent hidden
+(no console window) at logon - no admin rights or Windows Service needed.
+Remove it with `scripts\uninstall-startup.ps1`.
+
 ## How it identifies printers
 
 Every printer Windows reports is auto-registered with a stable ID derived
@@ -33,9 +43,10 @@ installed on this PC, it shows up in the mobile app's printer list within
 - `agent.js` - orchestrates registration, heartbeat, polling, and job handling.
 - `cloud-client.js` - all HTTP calls to the backend.
 - `printer-discovery.js` - lists installed Windows printers (via PowerShell + JSON, not pdf-to-printer's own lister - see the comment in that file for why).
-- `printer-service.js` + `adapters/` - picks a `PrinterAdapter` (Windows today; an IPP stub is scaffolded for direct network printers later) and sends the file to it.
+- `printer-service.js` + `adapters/` - picks a `PrinterAdapter` (Windows driver via WMI/SumatraPDF, or direct IPP/IPPS for network printers found via mDNS) and sends the file to it.
 - `server/dashboard.js` + `public/index.html` - the local status dashboard.
+- `scripts/` - optional Windows logon auto-start (Scheduled Task).
 
-Job lifecycle handled here: `assigned → downloading → printing → completed`
-or `failed`, reported back to the backend via a per-agent secret token
-issued at registration (never hardcoded).
+Job lifecycle handled here: `assigned → downloading → printing → completed`,
+`failed`, or `cancelled`, reported back to the backend via a per-agent
+secret token issued at registration (never hardcoded).

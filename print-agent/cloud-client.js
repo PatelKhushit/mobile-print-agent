@@ -32,6 +32,16 @@ async function registerPrinter({ printerId, name, brand, model, location, localP
   );
 }
 
+async function syncPrinters(printers) {
+  const cfg = readConfig();
+  const { data } = await axios.post(
+    `${cfg.backendUrl}/api/printers/sync`,
+    { printers },
+    { headers: authHeaders(cfg), timeout: cfg.requestTimeout }
+  );
+  return data; // { success, synced: [printerId, ...] }
+}
+
 async function getPendingJob() {
   const cfg = readConfig();
   const { data } = await axios.get(`${cfg.backendUrl}/api/print-jobs/pending`, {
@@ -90,6 +100,7 @@ module.exports = {
   register,
   heartbeat,
   registerPrinter,
+  syncPrinters,
   getPendingJob,
   getJobStatus,
   markDownloading,

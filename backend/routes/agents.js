@@ -2,7 +2,8 @@ const express = require('express');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const Agent = require('../models/Agent');
-const { agentAuth } = require('../middleware/auth');
+const Printer = require('../models/Printer');
+const { agentAuth, jwtAuth, requireAdmin } = require('../middleware/auth');
 const logger = require('../src/utils/logger');
 
 const router = express.Router();
@@ -49,6 +50,12 @@ router.post('/heartbeat', agentAuth, async (req, res) => {
   if (version) req.agent.version = version;
   await req.agent.save();
   res.json({ success: true });
+});
+
+// GET /api/agents/:agentId/printers - admin view of everything one agent owns
+router.get('/:agentId/printers', jwtAuth, requireAdmin, async (req, res) => {
+  const printers = await Printer.find({ agentId: req.params.agentId }).lean();
+  res.json({ success: true, printers });
 });
 
 module.exports = router;
