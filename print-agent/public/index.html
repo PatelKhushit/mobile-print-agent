@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Local Print Agent</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: 'Consolas', 'Courier New', monospace;
+    background: #0d1117;
+    color: #c9d1d9;
+    max-width: 640px;
+    margin: 24px auto;
+    padding: 0 16px;
+  }
+  .panel {
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px;
+    background: #161b22;
+  }
+  h1 {
+    font-size: 16px;
+    letter-spacing: 2px;
+    text-align: center;
+    margin: 0 0 16px;
+    border-bottom: 1px dashed #30363d;
+    padding-bottom: 12px;
+  }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; }
+  .label { color: #8b949e; }
+  .value { font-weight: bold; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot.green { background: #3fb950; }
+  .dot.red { background: #f85149; }
+  .dot.gray { background: #6e7681; }
+  .actions { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  button {
+    flex: 1;
+    background: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 10px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover { background: #30363d; }
+  select {
+    width: 100%;
+    padding: 8px;
+    background: #0d1117;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    margin-top: 6px;
+  }
+  #msg { margin-top: 12px; min-height: 20px; font-size: 13px; color: #58a6ff; }
+  #logs {
+    margin-top: 16px;
+    background: #010409;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 10px;
+    height: 220px;
+    overflow-y: auto;
+    font-size: 12px;
+    white-space: pre-wrap;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <h1>LOCAL PRINT AGENT</h1>
+    <div class="row"><span class="label">Agent ID</span><span class="value" id="agentId">-</span></div>
+    <div class="row"><span class="label">Backend</span><span class="value"><span class="dot gray" id="backendDot"></span><span id="backendText">-</span></span></div>
+    <div class="row"><span class="label">Printer</span><span class="value" id="printerName">-</span></div>
+    <div class="row"><span class="label">Printer Status</span><span class="value"><span class="dot gray" id="printerDot"></span><span id="printerText">-</span></span></div>
+    <div class="row"><span class="label">Last Check</span><span class="value" id="lastCheck">-</span></div>
+    <div class="row"><span class="label">Last Job</span><span class="value" id="lastJob">-</span></div>
+    <div class="row"><span class="label">Last Print</span><span class="value" id="lastPrint">-</span></div>
+    <div class="row"><span class="label">Jobs Printed Today</span><span class="value" id="jobsToday">-</span></div>
+
+    <select id="printerSelect"><option>Loading printers...</option></select>
+
+    <div class="actions">
+      <button id="btnSelect">Use Selected Printer</button>
+      <button id="btnTest">Test Printer</button>
+      <button id="btnRefresh">Refresh</button>
+      <button id="btnLogs">View Logs</button>
+    </div>
+    <div id="msg"></div>
+    <pre id="logs"></pre>
+  </div>
+
+<script>
+async function refreshStatus() {
+  const res = await fetch('/api/status');
+  const s = await res.json();
+  document.getElementById('agentId').textContent = s.agentId || '(not set)';
+  document.getElementById('backendDot').className = 'dot ' + (s.backendConnected ? 'green' : 'red');
+  document.getElementById('backendText').textContent = s.backendConnected ? 'Connected' : 'Disconnected';
+  document.getElementById('printerName').textContent = s.printerName || '(not configured)';
+  document.getElementById('printerDot').className = 'dot ' + (s.printerReady ? 'green' : 'red');
+  document.getElementById('printerText').textContent = s.printerReady ? 'Ready' : 'Not available';
+  document.getElementById('lastCheck').textContent = s.lastCheck ? new Date(s.lastCheck).toLocaleTimeString() : '-';
+  document.getElementById('lastJob').textContent = s.lastJobId || '-';
+  document.getElementById('lastPrint').textContent = s.lastPrintStatus || '-';
+  document.getElementById('jobsToday').textContent = s.jobsPrintedToday;
+}
+
+async function loadPrinters() {
+  const res = await fetch('/api/printers');
+  const data = await res.json();
+  const select = document.getElementById('printerSelect');
+  select.innerHTML = '';
+  if (!data.success || !data.printers.length) {
+    select.innerHTML = '<option>No printers found</option>';
+    return;
+  }
+  data.printers.forEach((name) => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    select.appendChild(opt);
+  });
+}
+
+function setMsg(text) {
+  document.getElementById('msg').textContent = text;
+}
+
+document.getElementById('btnRefresh').addEventListener('click', () => {
+  setMsg('Refreshing...');
+  Promise.all([refreshStatus(), loadPrinters()]).then(() => setMsg('Refreshed.'));
+});
+
+document.getElementById('btnSelect').addEventListener('click', async () => {
+  const printerName = document.getElementById('printerSelect').value;
+  setMsg('Saving printer selection...');
+  const res = await fetch('/api/select-printer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ printerName }),
+  });
+  const data = await res.json();
+  setMsg(data.success ? `Printer set to ${printerName}` : data.error);
+  refreshStatus();
+});
+
+document.getElementById('btnTest').addEventListener('click', async () => {
+  setMsg('Sending test page...');
+  const res = await fetch('/api/test-print', { method: 'POST' });
+  const data = await res.json();
+  setMsg(data.success ? data.message : data.error);
+  refreshStatus();
+});
+
+document.getElementById('btnLogs').addEventListener('click', async () => {
+  const el = document.getElementById('logs');
+  if (el.style.display === 'block') { el.style.display = 'none'; return; }
+  const res = await fetch('/api/logs');
+  const data = await res.json();
+  el.textContent = data.logs.join('\n');
+  el.style.display = 'block';
+  el.scrollTop = el.scrollHeight;
+});
+
+refreshStatus();
+loadPrinters();
+setInterval(refreshStatus, 4000);
+</script>
+</body>
+</html>

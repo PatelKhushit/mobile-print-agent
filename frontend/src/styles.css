@@ -1,0 +1,224 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #2a2f3a;
+  --text: #e6e8eb;
+  --muted: #8a92a3;
+  --accent: #4f8cff;
+  --green: #3fb950;
+  --red: #f85149;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 24px 16px;
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px 20px;
+}
+
+h1 {
+  font-size: 15px;
+  letter-spacing: 2px;
+  text-align: center;
+  margin: 0 0 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed var(--border);
+  color: var(--muted);
+}
+
+.field {
+  display: block;
+  margin-bottom: 16px;
+}
+
+.field > span {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.field input[type='text'],
+.field select,
+.field input[type='file'] {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #0d0f14;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.field small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.stepper button {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #0d0f14;
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.stepper-value {
+  font-size: 20px;
+  min-width: 24px;
+  text-align: center;
+}
+
+.primary-btn {
+  width: 100%;
+  padding: 16px;
+  border-radius: 12px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+.primary-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status-line {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.status-line .label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.status-card { text-align: center; }
+
+.status-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+
+.job-id {
+  color: var(--text);
+  font-weight: 600;
+  font-family: monospace;
+}
+
+.steps {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  text-align: left;
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  color: var(--muted);
+  font-size: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.steps li:last-child { border-bottom: none; }
+
+.steps li .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.steps li.done { color: var(--text); }
+.steps li.done .dot { background: var(--green); }
+.steps li.active { color: var(--accent); }
+.steps li.active .dot { background: var(--accent); }
+
+.result {
+  padding: 24px 0;
+}
+
+.result-icon {
+  font-size: 42px;
+  margin-bottom: 8px;
+}
+
+.result.success .result-icon,
+.result.success .result-title { color: var(--green); }
+
+.result.failed .result-icon,
+.result.failed .result-title { color: var(--red); }
+
+.result-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.result-detail {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.hint.error { color: var(--red); }
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 8px;
+}
