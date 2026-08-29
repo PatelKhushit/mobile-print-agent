@@ -8,7 +8,7 @@ const STATUS_LABEL = {
   offline: '🔴 Offline',
 };
 
-export default function PrintTest({ onLogout, isAdmin, onOpenAdmin }) {
+export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettings }) {
   const [printerId, setPrinterId] = useState('');
   const [printers, setPrinters] = useState([]);
   const [printersLoaded, setPrintersLoaded] = useState(false);
@@ -164,6 +164,9 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin }) {
             Manage Printers
           </button>
         )}
+        <button className="link-btn" onClick={onOpenSettings}>
+          Settings
+        </button>
         <button className="link-btn" onClick={onLogout}>
           Sign out
         </button>

@@ -47,6 +47,11 @@ export async function register(email, password, name) {
   return data;
 }
 
+export async function changePassword(currentPassword, newPassword) {
+  const { data } = await client.post('/api/auth/change-password', { currentPassword, newPassword });
+  return data;
+}
+
 export async function getSamplePdfUrl() {
   const { data } = await client.get('/api/sample-pdf');
   return data.fileUrl;
