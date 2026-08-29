@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { getPrintJob } from '../api';
 
 const STEPS = [
-  { key: 'queued', label: 'Queued' },
-  { key: 'claimed', label: 'PC Connected / Job Claimed' },
+  { key: 'queued', label: 'Job Created' },
+  { key: 'assigned', label: 'Printer Connected' },
+  { key: 'downloading', label: 'Document Downloaded' },
   { key: 'printing', label: 'Printing' },
-  { key: 'completed', label: 'Completed' },
+  { key: 'completed', label: 'Print Completed' },
 ];
 
-const STEP_INDEX = { queued: 0, claimed: 1, printing: 2, completed: 3 };
+const STEP_INDEX = { queued: 0, assigned: 1, downloading: 2, printing: 3, completed: 4 };
 
 export default function JobStatus({ jobId, onReset }) {
   const [job, setJob] = useState(null);

@@ -1,9 +1,6 @@
 node_modules/
 .env
 dist/
-backend/uploads/*
-!backend/uploads/.gitkeep
-backend/data/*.json
 backend/public/sample-test-page.pdf
 print-agent/logs/*.log
 print-agent/tmp/*

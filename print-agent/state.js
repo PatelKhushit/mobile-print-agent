@@ -6,8 +6,7 @@
 const state = {
   startedAt: new Date().toISOString(),
   backendConnected: false,
-  printerName: '',
-  printerReady: false,
+  printers: [], // locally detected + auto-registered printer names
   lastCheck: null,
   lastJobId: null,
   lastPrintStatus: null,

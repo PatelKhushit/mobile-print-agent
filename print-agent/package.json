@@ -5,8 +5,7 @@
   "main": "agent.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node agent.js",
-    "setup-printer": "node setup-printer.js"
+    "start": "node agent.js"
   },
   "dependencies": {
     "axios": "^1.7.9",

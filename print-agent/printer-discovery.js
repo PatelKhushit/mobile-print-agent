@@ -1,6 +1,5 @@
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { print } = require('pdf-to-printer');
 
 const execFileAsync = promisify(execFile);
 
@@ -48,21 +47,18 @@ async function printerExists(printerName) {
   return printers.includes(printerName);
 }
 
-/**
- * Sends a PDF to the given printer by shelling out to the SumatraPDF binary
- * bundled with pdf-to-printer. This code path never touches the buggy
- * printer-listing logic above - it just runs `SumatraPDF.exe -print-to
- * "<name>" ...`, so it works even though listPrinters() had to be
- * reimplemented. Resolves once the OS print spooler accepts the job (not
- * once paper physically comes out).
- */
-async function printFile(filePath, { printerName, copies = 1, color = false }) {
-  await print(filePath, {
-    printer: printerName,
-    copies,
-    monochrome: !color,
-    silent: true,
-  });
+/** Deterministic, stable printerId derived from agent + local printer name -
+ * same value every run, so registered printers and existing print jobs
+ * referencing them stay valid across agent restarts. */
+function slugify(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
-module.exports = { listPrinters, defaultPrinterName, printerExists, printFile };
+function printerIdFor(agentId, localPrinterName) {
+  return `${slugify(agentId)}-${slugify(localPrinterName)}`;
+}
+
+module.exports = { listPrinters, defaultPrinterName, printerExists, printerIdFor };

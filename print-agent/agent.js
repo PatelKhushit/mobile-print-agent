@@ -1,10 +1,11 @@
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
 
-const { readConfig } = require('./config');
+const { readConfig, saveEnvValue } = require('./config');
 const logger = require('./utils/logger');
-const printer = require('./printer');
+const discovery = require('./printer-discovery');
+const printerService = require('./printer-service');
+const cloud = require('./cloud-client');
 const { startDashboard } = require('./server/dashboard');
 const { state, bumpJobsPrintedToday } = require('./state');
 
@@ -14,47 +15,52 @@ fs.mkdirSync(TMP_DIR, { recursive: true });
 let cfg = readConfig();
 let polling = false;
 let stopped = false;
-let cachedPrinters = [];
-
-function authHeaders() {
-  return {
-    'X-Agent-Id': cfg.agentId,
-    'X-Agent-Secret': cfg.agentSecret,
-    'X-Agent-Printers': encodeURIComponent(JSON.stringify(cachedPrinters)),
-  };
-}
+let cachedPrinters = []; // local OS printer names detected right now
 
 /**
- * Refreshed on a slower timer than the job poll loop (printer lists rarely
- * change and listing them shells out to PowerShell) but sent with every
- * poll so the backend knows which printers this agent can currently serve
- * (spec section 21: multi-printer support).
+ * First-run flow from spec section 8: register once, get a secret token
+ * back, store it locally. Every run after the first just reuses the saved
+ * token - nothing is ever hardcoded.
  */
+async function ensureRegistered() {
+  cfg = readConfig();
+  if (cfg.agentToken) return;
+  if (!cfg.agentId) {
+    throw new Error('PRINT_AGENT_ID is not set in .env');
+  }
+  logger.log(`Registering agent "${cfg.agentId}" with backend...`);
+  const result = await cloud.register(cfg.agentId, cfg.agentId);
+  saveEnvValue('PRINT_AGENT_TOKEN', result.token);
+  cfg = readConfig();
+  logger.log('Agent registered and token saved to .env');
+}
+
 async function refreshPrinterList() {
   try {
-    cachedPrinters = await printer.listPrinters();
+    cachedPrinters = await discovery.listPrinters();
+    state.printers = cachedPrinters;
   } catch (err) {
     logger.log(`Failed to list printers: ${err.message}`);
   }
 }
 
-async function refreshPrinterReadiness() {
-  cfg = readConfig();
-  state.printerName = cfg.printerName;
-  if (!cfg.printerName) {
-    state.printerReady = false;
-    return;
+/** Auto-registers every detected local printer as its own addressable
+ * Printer record (spec section 7) - nothing to configure by hand. */
+async function registerLocalPrinters() {
+  for (const localName of cachedPrinters) {
+    const printerId = discovery.printerIdFor(cfg.agentId, localName);
+    try {
+      await cloud.registerPrinter({
+        printerId,
+        name: localName,
+        location: '',
+        localPrinterName: localName,
+        capabilities: {},
+      });
+    } catch (err) {
+      logger.log(`Failed to register printer "${localName}": ${err.message}`);
+    }
   }
-  try {
-    state.printerReady = await printer.printerExists(cfg.printerName);
-  } catch {
-    state.printerReady = false;
-  }
-}
-
-async function downloadFile(url, destPath) {
-  const response = await axios.get(url, { responseType: 'arraybuffer', timeout: cfg.requestTimeout });
-  fs.writeFileSync(destPath, response.data);
 }
 
 function cleanup(tmpPath) {
@@ -65,11 +71,7 @@ function cleanup(tmpPath) {
 async function reportFailure(jobId, message) {
   logger.log(`Reporting failure for ${jobId}: ${message}`);
   try {
-    await axios.post(
-      `${cfg.backendUrl}/api/print-jobs/${jobId}/fail`,
-      { error: message },
-      { headers: authHeaders(), timeout: cfg.requestTimeout }
-    );
+    await cloud.markFailed(jobId, message);
   } catch (err) {
     logger.log(`Warning: could not report failure to backend: ${err.message}`);
   }
@@ -81,8 +83,15 @@ async function handleJob(job) {
   const tmpPath = path.join(TMP_DIR, `${job.jobId}.pdf`);
 
   try {
+    await cloud.markDownloading(job.jobId);
+  } catch (err) {
+    logger.log(`Warning: could not mark job as downloading (${err.message})`);
+  }
+
+  try {
     logger.log('Downloading PDF');
-    await downloadFile(job.fileUrl, tmpPath);
+    const buffer = await cloud.downloadFile(job.fileUrl, cfg.requestTimeout);
+    fs.writeFileSync(tmpPath, buffer);
     logger.log('PDF downloaded');
   } catch (err) {
     logger.log(`Unable to download print document (${err.message})`);
@@ -91,15 +100,10 @@ async function handleJob(job) {
     return;
   }
 
-  await refreshPrinterReadiness();
-  cfg = readConfig();
-  // A job may request a specific printer on this PC (job.printerId); "DEFAULT"
-  // means "use whatever this agent is configured with" (spec section 21).
-  const targetPrinterName = job.printerId && job.printerId !== 'DEFAULT' ? job.printerId : cfg.printerName;
-  const targetExists = await printer.printerExists(targetPrinterName).catch(() => false);
-
-  if (!targetPrinterName || !targetExists) {
-    logger.log(`Configured printer was not found ("${targetPrinterName || '(none)'}")`);
+  // The backend resolves job.printerId to the exact local OS printer name
+  // server-side (see routes/printJobs.js), so the agent never has to guess.
+  if (!job.localPrinterName || !cachedPrinters.includes(job.localPrinterName)) {
+    logger.log(`Configured printer was not found ("${job.localPrinterName || '(none)'}")`);
     await reportFailure(job.jobId, 'Configured printer was not found.');
     cleanup(tmpPath);
     state.lastPrintStatus = 'Failed';
@@ -107,29 +111,21 @@ async function handleJob(job) {
   }
 
   try {
-    await axios.post(
-      `${cfg.backendUrl}/api/print-jobs/${job.jobId}/printing`,
-      {},
-      { headers: authHeaders(), timeout: cfg.requestTimeout }
-    );
+    await cloud.markPrinting(job.jobId);
   } catch (err) {
     logger.log(`Warning: could not mark job as printing (${err.message})`);
   }
 
   try {
-    logger.log(`Printing to "${targetPrinterName}"...`);
-    await printer.printFile(tmpPath, {
-      printerName: targetPrinterName,
+    logger.log(`Printing to "${job.localPrinterName}"...`);
+    await printerService.printFile(tmpPath, {
+      printerName: job.localPrinterName,
       copies: job.copies,
       color: job.color,
     });
     logger.log('Print completed');
 
-    await axios.post(
-      `${cfg.backendUrl}/api/print-jobs/${job.jobId}/complete`,
-      { status: 'completed' },
-      { headers: authHeaders(), timeout: cfg.requestTimeout }
-    );
+    await cloud.markCompleted(job.jobId);
     logger.log('Backend updated');
     state.lastPrintStatus = 'Completed';
     bumpJobsPrintedToday();
@@ -147,25 +143,26 @@ async function pollOnce() {
   polling = true;
   try {
     cfg = readConfig();
-    logger.log('Checking jobs');
-    const res = await axios.get(`${cfg.backendUrl}/api/print-jobs/pending`, {
-      headers: authHeaders(),
-      timeout: cfg.requestTimeout,
-    });
-    state.backendConnected = true;
-    state.lastCheck = new Date().toISOString();
 
-    const job = res.data && res.data.job;
+    try {
+      await cloud.heartbeat(cachedPrinters, '1.0.0');
+      state.backendConnected = true;
+    } catch (err) {
+      state.backendConnected = false;
+      state.lastCheck = new Date().toISOString();
+      if (err.response && err.response.status === 401) {
+        logger.log('Print agent authentication failed.');
+      } else {
+        logger.log(`Cannot connect to cloud backend. Retrying... (${err.message})`);
+      }
+      return;
+    }
+
+    logger.log('Checking jobs');
+    const job = await cloud.getPendingJob();
+    state.lastCheck = new Date().toISOString();
     if (job) {
       await handleJob(job);
-    }
-  } catch (err) {
-    state.backendConnected = false;
-    state.lastCheck = new Date().toISOString();
-    if (err.response && err.response.status === 401) {
-      logger.log('Print agent authentication failed.');
-    } else {
-      logger.log(`Cannot connect to cloud backend. Retrying... (${err.message})`);
     }
   } finally {
     polling = false;
@@ -182,21 +179,24 @@ function scheduleLoop() {
 async function start() {
   logger.log('Agent started');
 
-  if (!cfg.agentId || !cfg.agentSecret) {
-    logger.log('WARNING: PRINT_AGENT_ID / PRINT_AGENT_SECRET are not configured in .env');
-  }
-  if (!cfg.printerName) {
-    logger.log('WARNING: PRINTER_NAME is not configured. Run "npm run setup-printer" or use the dashboard.');
+  try {
+    await ensureRegistered();
+  } catch (err) {
+    logger.log(`FATAL: ${err.message}`);
+    process.exit(1);
   }
 
-  await refreshPrinterReadiness();
   await refreshPrinterList();
-  setInterval(refreshPrinterList, 30000);
+  await registerLocalPrinters();
+  setInterval(async () => {
+    await refreshPrinterList();
+    await registerLocalPrinters();
+  }, 30000);
 
   startDashboard({
     getConfig: () => cfg,
     state,
-    onPrinterSelected: refreshPrinterReadiness,
+    getCachedPrinters: () => cachedPrinters,
   });
 
   scheduleLoop();

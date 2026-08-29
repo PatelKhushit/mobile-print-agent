@@ -2,8 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { createPrintJob, getAvailablePrinters, getSamplePdfUrl, uploadPdf } from '../api';
 import JobStatus from './JobStatus';
 
-export default function PrintTest() {
-  const [printerId, setPrinterId] = useState('DEFAULT');
+const STATUS_LABEL = {
+  online: '🟢 Online',
+  unavailable: '🟠 Printer Unavailable',
+  offline: '🔴 Offline',
+};
+
+export default function PrintTest({ onLogout, isAdmin, onOpenAdmin }) {
+  const [printerId, setPrinterId] = useState('');
   const [printers, setPrinters] = useState([]);
   const [printersLoaded, setPrintersLoaded] = useState(false);
   const [copies, setCopies] = useState(1);
@@ -19,15 +25,21 @@ export default function PrintTest() {
     async function loadPrinters() {
       try {
         const list = await getAvailablePrinters();
-        if (!cancelled) setPrinters(list);
+        if (cancelled) return;
+        setPrinters(list);
+        setPrinterId((current) => {
+          if (current && list.some((p) => p.printerId === current)) return current;
+          const firstOnline = list.find((p) => p.status === 'online');
+          return firstOnline ? firstOnline.printerId : current;
+        });
       } catch {
-        // Backend unreachable - keep the DEFAULT-only option available.
+        // Backend unreachable - leave the list as-is, user can retry.
       } finally {
         if (!cancelled) setPrintersLoaded(true);
       }
     }
     loadPrinters();
-    const timer = setInterval(loadPrinters, 10000);
+    const timer = setInterval(loadPrinters, 8000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -41,7 +53,13 @@ export default function PrintTest() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
+  const selectedPrinter = printers.find((p) => p.printerId === printerId);
+
   async function handleTestPrint() {
+    if (!printerId) {
+      setStatus('Select a printer first.');
+      return;
+    }
     setBusy(true);
     setStatus('Waiting...');
     try {
@@ -56,9 +74,9 @@ export default function PrintTest() {
       }
 
       setStatus('Creating print job...');
-      const result = await createPrintJob({ fileUrl, copies, color, printerId });
+      const result = await createPrintJob({ printerId, fileUrl, copies, color });
       setJobId(result.jobId);
-      setStatus('Waiting for PC...');
+      setStatus('Waiting for print agent...');
     } catch (err) {
       const message = err.response?.data?.error || err.message || 'Something went wrong.';
       setStatus(`Error: ${message}`);
@@ -70,7 +88,7 @@ export default function PrintTest() {
   if (jobId) {
     return (
       <div className="card">
-        <h1>MOBILE PRINT TEST</h1>
+        <h1>REMOTE PRINT</h1>
         <JobStatus jobId={jobId} onReset={reset} />
       </div>
     );
@@ -78,21 +96,22 @@ export default function PrintTest() {
 
   return (
     <div className="card">
-      <h1>MOBILE PRINT TEST</h1>
+      <h1>REMOTE PRINT</h1>
 
       <label className="field">
         <span>Printer</span>
         <select value={printerId} onChange={(e) => setPrinterId(e.target.value)}>
-          <option value="DEFAULT">Any available printer (DEFAULT)</option>
+          <option value="">Select a printer...</option>
           {printers.map((p) => (
-            <option key={`${p.agentId}-${p.printerName}`} value={p.printerName}>
-              {p.agentId} — {p.printerName}
+            <option key={p.printerId} value={p.printerId}>
+              {p.name} {p.location ? `(${p.location})` : ''}
             </option>
           ))}
         </select>
         {printersLoaded && printers.length === 0 && (
-          <small>No printers currently online. Start a Local Print Agent, or use DEFAULT.</small>
+          <small>No printers registered yet. Start a Print Agent to register one.</small>
         )}
+        {selectedPrinter && <small>{STATUS_LABEL[selectedPrinter.status] || selectedPrinter.status}</small>}
       </label>
 
       <label className="field">
@@ -117,7 +136,7 @@ export default function PrintTest() {
       </label>
 
       <label className="field">
-        <span>PDF</span>
+        <span>Document</span>
         <input
           ref={fileInputRef}
           type="file"
@@ -127,12 +146,27 @@ export default function PrintTest() {
         {!file && <small>No file selected - a generated test PDF will be used.</small>}
       </label>
 
-      <button className="primary-btn" onClick={handleTestPrint} disabled={busy}>
-        {busy ? 'Sending...' : 'TEST PRINT'}
+      <button
+        className="primary-btn"
+        onClick={handleTestPrint}
+        disabled={busy || !printerId || selectedPrinter?.status !== 'online'}
+      >
+        {busy ? 'Sending...' : 'PRINT'}
       </button>
 
       <div className="status-line">
         <span className="label">Status:</span> {status}
+      </div>
+
+      <div className="footer-links">
+        {isAdmin && (
+          <button className="link-btn" onClick={onOpenAdmin}>
+            Manage Printers
+          </button>
+        )}
+        <button className="link-btn" onClick={onLogout}>
+          Sign out
+        </button>
       </div>
     </div>
   );

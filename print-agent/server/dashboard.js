@@ -1,21 +1,22 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const printer = require('../printer');
+const discovery = require('../printer-discovery');
+const printerService = require('../printer-service');
 const { buildTestPdf } = require('../utils/testPdf');
 const logger = require('../utils/logger');
-const { savePrinterName } = require('../config');
 
 const TMP_DIR = path.join(__dirname, '..', 'tmp');
 
 /**
- * Local dashboard + local printer utilities (spec section 11: "GET
- * /local/printers or equivalent local utility", section 14 dashboard,
- * section 15 Test Printer button). Runs on http://localhost:<port> only -
- * never exposed to the internet, matching the "no public printer ports"
- * security rule.
+ * Local dashboard + local printer utilities (spec section 25 dashboard,
+ * section 26 Test Print). Runs on http://localhost:<port> only - never
+ * exposed to the internet, matching the "no public printer ports" rule.
+ * Every printer this agent detects is auto-registered with the cloud
+ * backend (see agent.js), so there's no manual "select default printer"
+ * step here anymore - this page is status + diagnostics only.
  */
-function startDashboard({ getConfig, state, onPrinterSelected }) {
+function startDashboard({ getConfig, state, getCachedPrinters }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json());
@@ -27,8 +28,7 @@ function startDashboard({ getConfig, state, onPrinterSelected }) {
       agentId: cfg.agentId,
       backendUrl: cfg.backendUrl,
       backendConnected: state.backendConnected,
-      printerName: cfg.printerName,
-      printerReady: state.printerReady,
+      printers: getCachedPrinters(),
       lastCheck: state.lastCheck,
       lastJobId: state.lastJobId,
       lastPrintStatus: state.lastPrintStatus,
@@ -37,10 +37,10 @@ function startDashboard({ getConfig, state, onPrinterSelected }) {
     });
   });
 
-  // GET /api/printers - local printer detection (spec section 11)
+  // GET /api/printers - refresh + return the live local printer list
   app.get('/api/printers', async (req, res) => {
     try {
-      const printers = await printer.listPrinters();
+      const printers = await discovery.listPrinters();
       res.json({ success: true, printers });
     } catch (err) {
       logger.log(`Failed to list printers: ${err.message}`);
@@ -48,37 +48,22 @@ function startDashboard({ getConfig, state, onPrinterSelected }) {
     }
   });
 
-  app.post('/api/select-printer', async (req, res) => {
+  // POST /api/test-print { printerName } - spec section 26
+  app.post('/api/test-print', async (req, res) => {
     const { printerName } = req.body || {};
-    if (!printerName || typeof printerName !== 'string') {
+    if (!printerName) {
       return res.status(400).json({ success: false, error: 'printerName is required.' });
     }
-    const exists = await printer.printerExists(printerName);
-    if (!exists) {
-      return res.status(400).json({ success: false, error: 'Configured printer was not found.' });
-    }
-    savePrinterName(printerName);
-    logger.log(`Printer selected: ${printerName}`);
-    if (onPrinterSelected) await onPrinterSelected();
-    res.json({ success: true, printerName });
-  });
-
-  // POST /api/test-print - spec section 15
-  app.post('/api/test-print', async (req, res) => {
-    const cfg = getConfig();
-    if (!cfg.printerName) {
-      return res.status(400).json({ success: false, error: 'No printer configured.' });
-    }
-    const exists = await printer.printerExists(cfg.printerName);
+    const exists = await discovery.printerExists(printerName);
     if (!exists) {
       return res.status(400).json({ success: false, error: 'Configured printer was not found.' });
     }
     fs.mkdirSync(TMP_DIR, { recursive: true });
     const testPath = path.join(TMP_DIR, 'test-print.pdf');
     try {
-      fs.writeFileSync(testPath, buildTestPdf('Local Print Agent - Test Page'));
-      logger.log('Sending test page...');
-      await printer.printFile(testPath, { printerName: cfg.printerName, copies: 1, color: false });
+      fs.writeFileSync(testPath, buildTestPdf('Remote Print Agent - Test Page'));
+      logger.log(`Sending test page to "${printerName}"...`);
+      await printerService.printFile(testPath, { printerName, copies: 1, color: false });
       logger.log('Test print completed.');
       res.json({ success: true, message: 'Test print completed.' });
     } catch (err) {

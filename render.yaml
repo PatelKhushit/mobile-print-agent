@@ -23,5 +23,7 @@ services:
         value: 120
       - key: PUBLIC_BASE_URL
         sync: false
-      - key: AGENT_CREDENTIALS
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
         sync: false

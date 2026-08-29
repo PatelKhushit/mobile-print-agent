@@ -1,24 +1,35 @@
-# Mobile-to-PC Cloud Printing System (Test Version)
+# Remote Cloud Printing System
 
-Send a print job from a phone's browser, have it queue in a cloud backend,
-and have a Windows PC automatically pick it up and print it on a real
-USB/Wi-Fi printer.
+Send a print job from a phone on any internet connection (5G, a different
+Wi-Fi, anywhere) and have it print on a Wi-Fi/network printer at a
+completely different location. The phone and the printer never need to be
+on the same network.
 
 ```text
-Mobile Web Page  --HTTPS-->  Cloud Backend  <--HTTPS polling--  Local Print Agent  -->  Windows Printer
+📱 Mobile (any network)
+      │ HTTPS
+      ▼
+☁️  Cloud Backend (MongoDB-backed job queue, JWT auth)
+      │ HTTPS polling (outbound only, from the printer's side)
+      ▼
+🖥️  Print Agent (on the printer's network)
+      │ Local Wi-Fi/USB
+      ▼
+🖨️  Printer
 ```
 
-The printer is **never** exposed to the internet. The Local Print Agent runs
-on the printer's PC and makes outbound requests to the backend - nothing
-ever connects inbound to the PC or the printer.
+The printer's IP/port is **never** exposed to the internet, no router port
+forwarding is required, and the Print Agent only ever makes outbound
+requests - nothing connects inbound to the printer's network.
 
 ## Project layout
 
 ```text
 mobile-print-system/
-├── backend/       Node.js + Express cloud API, job queue, job claiming
-├── frontend/      React mobile-first "Test Print" web page
-├── print-agent/   Windows Node.js agent + local dashboard (localhost:3001)
+├── backend/       Node.js + Express + MongoDB cloud API (auth, printers, jobs)
+├── frontend/      React mobile-first print page + admin panel
+├── print-agent/   Windows agent: self-registers, auto-detects printers,
+│                  polls for jobs, local dashboard (localhost:3001)
 └── README.md      This file
 ```
 
@@ -26,15 +37,21 @@ mobile-print-system/
 
 ## 1. Install Node.js
 
-Download and install the LTS version from https://nodejs.org (v18 or newer).
-Verify with:
+https://nodejs.org (v18+). Verify with `node -v`.
 
-```bash
-node -v
-npm -v
-```
+## 2. Set up MongoDB
 
-## 2. Backend setup
+You need a MongoDB connection string - a free [MongoDB Atlas](https://mongodb.com/cloud/atlas/register)
+M0 cluster works fine:
+
+1. Create a free cluster.
+2. **Database Access** → add a database user with a password.
+3. **Network Access** → allow `0.0.0.0/0` (needed since most hosts don't
+   have a fixed outbound IP).
+4. **Connect** → **Drivers** → copy the connection string
+   (`mongodb+srv://user:password@cluster0.xxxxx.mongodb.net/`).
+
+## 3. Backend setup
 
 ```bash
 cd backend
@@ -44,47 +61,46 @@ cp .env.example .env
 
 Edit `backend/.env`:
 
-- `PUBLIC_BASE_URL` - the URL this backend is reachable at. For a same-machine
-  trial, `http://localhost:4000` is fine. If your phone needs to reach it
-  over Wi-Fi, use your PC's LAN IP, e.g. `http://192.168.1.20:4000`, and make
-  sure `PORT` matches.
-- `AGENT_CREDENTIALS` - one `agentId:secret` pair per PC that will run a
-  Local Print Agent, e.g. `PC-001:pick-a-long-random-secret`. Add more,
-  comma-separated, as you add PCs.
-
-Start it:
+- `MONGODB_URI` - the connection string from step 2.
+- `JWT_SECRET` - a long random value, e.g.
+  `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+- `PUBLIC_BASE_URL` - the HTTPS URL this backend is reachable at. For a
+  same-machine trial `http://localhost:4000` is fine; for real remote use
+  (phone on a different network) this **must** be a real public HTTPS URL
+  (see Deployment below).
 
 ```bash
 npm start
 ```
 
-You should see:
+You should see `MongoDB connected` and `Print system backend listening on port 4000`.
 
-```text
-Print system backend listening on port 4000
-Public base URL: http://localhost:4000
-Configured agents: PC-001
+## 4. Create your account
+
+The **first** account ever registered automatically becomes an admin (no
+separate seed script needed):
+
+```bash
+curl -X POST http://localhost:4000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"a-strong-password","name":"You"}'
 ```
 
-## 3. Frontend setup
+Save the returned `token`, or just log in from the mobile page itself
+(it has a "Create account" link).
+
+## 5. Frontend setup
 
 ```bash
 cd frontend
 npm install
-cp .env.example .env
-```
-
-Edit `frontend/.env` so `VITE_BACKEND_URL` points at the backend from step 2
-(same host/port as `PUBLIC_BASE_URL` above).
-
-```bash
+cp .env.example .env    # set VITE_BACKEND_URL to match backend's PUBLIC_BASE_URL
 npm run dev
 ```
 
-Open the printed `http://localhost:5173` URL - on a phone on the same
-Wi-Fi, use your PC's LAN IP instead, e.g. `http://192.168.1.20:5173`.
+Open the printed URL, sign in (or create an account).
 
-## 4. Print Agent setup (on the Windows PC with the printer attached)
+## 6. Print Agent setup (on the network with the printer)
 
 ```bash
 cd print-agent
@@ -95,148 +111,127 @@ cp .env.example .env
 Edit `print-agent/.env`:
 
 - `BACKEND_URL` - same backend URL as above.
-- `PRINT_AGENT_ID` / `PRINT_AGENT_SECRET` - must exactly match one of the
-  `agentId:secret` pairs you put in `backend/.env`'s `AGENT_CREDENTIALS`.
-
-### Find your Windows printer name and select it
-
-```bash
-npm run setup-printer
-```
-
-This lists every printer Windows knows about and lets you pick one by
-number. It writes the exact name into `.env`'s `PRINTER_NAME`. You can
-re-run this any time, or change the printer later from the local dashboard
-(see below) without editing files by hand.
-
-### Start the agent
+- `PRINT_AGENT_ID` - pick anything unique, e.g. `PC-001`.
+- Leave `PRINT_AGENT_TOKEN` blank.
 
 ```bash
 node agent.js
 ```
 
+On first run the agent **registers itself** with the backend (spec
+section 8: register → receive a secret token → store it locally in
+`.env` → connect). Every printer Windows knows about is then
+**auto-registered** with the backend and immediately selectable from the
+mobile page - there's no manual "pick your printer" step.
+
 Expected output:
 
 ```text
 [11:20:01] Agent started
-[11:20:01] Dashboard available at http://localhost:3001
+[11:20:01] Registering agent "PC-001" with backend...
+[11:20:02] Agent registered and token saved to .env
+[11:20:05] Dashboard available at http://localhost:3001
 [11:20:05] Checking jobs
 ```
 
-Open `http://localhost:3001` in a browser on that PC to see the local
-dashboard: agent ID, backend connection status, configured printer and
-whether it's ready, last job, jobs printed today, and buttons for **Test
-Printer**, **Refresh**, and **View Logs**. You can also pick/change the
-printer from a dropdown right there instead of using `setup-printer`.
+Open `http://localhost:3001` for the local dashboard: cloud connection
+status, every detected printer, last job, jobs printed today, and a
+**Test Print** button per printer.
 
-## 5. Perform a test print
+## 7. Send a print job
 
-1. Make sure backend, frontend, and print agent are all running (steps 2-4).
-2. Open the frontend page on your phone (or a desktop browser).
-3. Optionally pick a PDF, or leave it blank to use a generated test PDF.
-4. Set copies / color if you want, then press **TEST PRINT**.
-5. Watch the status flow: Queued → PC Connected / Job Claimed → Printing →
-   Completed. On success you'll see **✓ PRINT COMPLETED**; the printer
-   should have physically printed a page within a few seconds (the agent
-   polls every `POLL_INTERVAL` ms, 5 seconds by default).
+1. Open the frontend, sign in.
+2. Select a printer from the dropdown (shows 🟢 online / 🟠 unavailable / 🔴 offline).
+3. Optionally pick a PDF, set copies/color, press **PRINT**.
+4. Watch the status flow: Job Created → Printer Connected → Document
+   Downloaded → Printing → **✓ Print Completed**.
 
-If it fails, the page shows the reason (see Troubleshooting below).
+For a true "different networks" test: run the Print Agent at Location B,
+then open the mobile page from a phone on mobile data (Wi-Fi off) at
+Location A. Nothing about the flow changes - that's the point.
 
 ---
 
-## How job claiming works (no double-printing)
+## How the job lifecycle works (no double-printing)
 
-Every print job moves through: `queued → claimed → printing → completed`
-(or `failed`). `GET /api/print-jobs/pending` atomically claims the oldest
-queued job for the requesting agent - Node's single-threaded event loop
-means two simultaneous polls can never both claim the same job. A job
-claimed by one agent will never be handed to another. If an agent crashes
-mid-job, the claim automatically expires after `JOB_CLAIM_TIMEOUT_MS`
-(default 2 minutes) and the job is requeued.
+```text
+queued → assigned → downloading → printing → completed
+                                            ↘ failed (after maxRetries)
+```
 
-## Security notes
+- `GET /api/print-jobs/pending` atomically claims the oldest queued job for
+  a printer the polling agent owns - `findOneAndUpdate` is atomic in
+  MongoDB, so this is race-safe even across multiple backend instances.
+- Job creation accepts an `idempotencyKey`; a retried create request with
+  the same key returns the original job instead of creating a duplicate
+  print (covers browser refresh / network retry / API retry).
+- If an agent crashes mid-job, the claim expires after
+  `JOB_CLAIM_TIMEOUT_MS` and the job is requeued - up to `maxRetries` (3)
+  times, then permanently failed. It never retries forever.
 
-- The printer and the PC never accept inbound connections; the agent only
-  makes outbound HTTPS/HTTP calls to the backend.
-- `PRINT_AGENT_SECRET` lives only in `print-agent/.env` and the backend's
-  `.env` - never in frontend code, which ships to every visitor's browser.
-- Every agent-only endpoint (`/pending`, `/printing`, `/complete`, `/fail`)
-  requires the `X-Agent-Id` / `X-Agent-Secret` headers to match a configured
-  agent.
-- Uploads are restricted to `application/pdf`, capped at `MAX_FILE_SIZE_MB`
-  (10 MB by default), and stored with randomly generated filenames.
-- `/api` is rate-limited per IP (`RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX`).
-- For real deployment, put the backend behind HTTPS (a reverse proxy like
-  Caddy/Nginx with a free Let's Encrypt certificate, or a host that
-  terminates TLS for you) and set `PUBLIC_BASE_URL`/`VITE_BACKEND_URL` to
-  the `https://` URL.
+## Security
+
+- **Mobile auth**: JWT, 30-day tokens. `POST /api/print-jobs` and
+  `POST /api/upload` require a valid token.
+- **Agent auth**: each agent registers once and gets a random 32-byte
+  token; only its bcrypt hash is stored, so a database leak alone can't
+  be used to impersonate an agent. Never hardcoded, never in `.env.example`.
+- **Files**: PDF-only, capped at `MAX_FILE_SIZE_MB`, stored in MongoDB
+  GridFS (not local disk - survives restarts/redeploys), served only via
+  signed, time-limited download links (`/api/files/:id?exp=&sig=`) that a
+  database leak or URL guess can't turn into permanent access.
+- **Network**: HTTPS end to end in production; the printer's IP/port is
+  never reachable from the internet; the agent only makes outbound calls.
+- **Admin actions** (rename/disable/delete a printer, trigger a test
+  print) require `role: "admin"` on the JWT.
+
+## Admin panel
+
+Any admin account sees a **Manage Printers** link on the mobile page:
+rename, disable/enable, delete, or trigger a real test print on any
+registered printer, across every agent/location.
 
 ## Troubleshooting
 
 | Message | Meaning | Fix |
 |---|---|---|
-| `Printer is not available.` | The printer exists but the print command failed | Check it's powered on, has paper, and isn't jammed/offline in Windows |
-| `Configured printer was not found.` | `PRINTER_NAME` in `print-agent/.env` doesn't match any installed printer | Run `npm run setup-printer` again, or select one on the dashboard |
-| `Cannot connect to cloud backend. Retrying...` | The agent can't reach `BACKEND_URL` | Check the backend is running and the URL/port are correct; check firewall |
-| `Unable to download print document.` | The agent couldn't fetch the PDF from `fileUrl` | Check the backend is reachable from the PC and the file wasn't deleted |
-| `Print agent authentication failed.` | `PRINT_AGENT_ID`/`PRINT_AGENT_SECRET` don't match the backend's `AGENT_CREDENTIALS` | Make sure both files use the exact same id and secret |
-| `This print job has already been claimed.` | Another agent (or a stale request) already owns this job | Expected behavior of the duplicate-print protection - no action needed |
+| `Configured printer was not found.` | The job's target printer isn't in the agent's currently-detected list | Printer may be off/unplugged; check the dashboard's printer list |
+| `Cannot connect to cloud backend. Retrying...` | Agent can't reach `BACKEND_URL` | Check the backend is running/reachable; check firewall |
+| `Print agent authentication failed.` | The saved `PRINT_AGENT_TOKEN` is invalid (e.g. re-registered elsewhere) | Delete `PRINT_AGENT_TOKEN` from `.env` and restart - it will re-register |
+| `Invalid or expired download link.` | The signed file URL's 24h window passed, or the signature doesn't match | Normal for very old retried jobs; create a new print job |
+| `This print job has already been claimed.` | Another agent (or a stale retry) already owns this job | Expected - the duplicate-print protection working as intended |
+| 401 on mobile actions | JWT expired or missing | Sign in again |
 
-Agent activity is always logged to `print-agent/logs/agent.log` and shown
-live in the dashboard's **View Logs** panel.
+Agent activity is logged to `print-agent/logs/agent.log` and shown live in
+the dashboard's **View Logs** panel.
 
 ## Running the Print Agent automatically on Windows startup
 
-For the trial, running `node agent.js` manually is fine. For a PC that
-should always be ready to print, use **Task Scheduler** so it starts
-without anyone logging in and running a command:
+Use **Task Scheduler** so it starts without anyone logging in:
 
-1. Open **Task Scheduler** → **Create Task...** (not "Basic Task", so you
-   get the "Run whether user is logged on or not" option).
-2. **General** tab: name it e.g. "Print Agent"; check "Run whether user is
-   logged on or not"; check "Run with highest privileges".
-3. **Triggers** tab → **New...** → "At startup".
-4. **Actions** tab → **New...**:
-   - Program/script: `node.exe` (or the full path from `where node`)
-   - Add arguments: `agent.js`
-   - Start in: the full path to the `print-agent` folder, e.g.
-     `C:\mobile-print-system\print-agent`
-5. **Conditions**/**Settings** tabs: uncheck "Start the task only if the
-   computer is on AC power" if this is a desktop.
-6. Save (you'll be asked for the Windows account password since it runs
-   whether logged in or not).
+1. **Create Task...** (not "Basic Task") → General: check "Run whether
+   user is logged on or not" + "Run with highest privileges".
+2. Triggers → New → "At startup".
+3. Actions → New → Program: `node.exe`, Arguments: `agent.js`, Start in:
+   the full path to `print-agent/`.
+4. Settings: uncheck "only if on AC power" for a desktop.
 
-Test it by rebooting the PC and checking `http://localhost:3001` comes up
-on its own, or right-click the task → **Run**.
+## Deployment (making it work from anywhere)
 
-## Final end-to-end test procedure
+- **Frontend**: any static host (Vercel, Netlify, ...) - it's a Vite
+  build (`npm run build` → `dist/`).
+- **Backend**: needs a host that runs a real long-lived Node process (not
+  stateless serverless) - Render, Railway, Fly.io, or a VPS all work. Set
+  `MONGODB_URI`, `JWT_SECRET`, and `PUBLIC_BASE_URL` (the backend's own
+  public HTTPS URL) as environment variables there.
+- **Print Agent**: stays on a PC on the printer's network, always. It
+  never gets "deployed" anywhere public - that's the entire point of this
+  architecture.
 
-1. Start the backend (`npm start` in `backend/`).
-2. Start the frontend (`npm run dev` in `frontend/`).
-3. Make sure a USB/Wi-Fi printer is connected and installed on the PC.
-4. Start the print agent (`node agent.js` in `print-agent/`) - dashboard
-   should show "Connected" and the configured printer as "Ready".
-5. Open the frontend on a phone.
-6. Optionally select a PDF.
-7. Press **TEST PRINT**.
-8. Backend creates `JOB-XXXX`.
-9. The agent claims it within one poll cycle (≤5s).
-10. The agent downloads the PDF.
-11. The agent sends the real print command to Windows.
-12. The printer physically prints the page.
-13. The backend job status moves `printing → completed`.
-14. The mobile page shows **✓ PRINT COMPLETED**.
+## Reusing this for billing/invoices
 
-## What's next (already designed for, not built in this trial)
-
-- **Multiple PCs/printers**: give each PC its own `agentId` (e.g.
-  `PC-AHM-001`, `PC-GNR-001`) and its own line in `AGENT_CREDENTIALS`; the
-  job-claiming logic already supports any number of agents polling at once.
-- **Swapping the JSON job store for MongoDB/PostgreSQL**: all job
-  persistence goes through `backend/src/db/jobStore.js` - only that file's
-  internals need to change; `backend/src/routes/printJobs.js` never touches
-  storage directly.
-- **Restaurant billing integration**: any system that can `POST` a PDF URL
-  to `/api/print-jobs` can reuse this exact pipeline for bills, kitchen
-  tickets, GST invoices, or thermal receipts - no changes needed on the
-  backend or agent side.
+Any system that can `POST` a PDF URL to `/api/print-jobs` (with a valid
+JWT and a registered `printerId`) can reuse this exact pipeline - bills,
+GST invoices, kitchen tickets, receipts, reports. No backend or agent
+changes needed; just point another app's "generate PDF → print" step at
+this API.

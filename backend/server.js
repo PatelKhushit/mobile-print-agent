@@ -1,4 +1,8 @@
 const express = require('express');
+// Patches Express so a thrown/rejected error inside an `async` route
+// handler reaches the error-handling middleware below, instead of hanging
+// the request or crashing the process (Express 4 doesn't do this itself).
+require('express-async-errors');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -6,24 +10,20 @@ const rateLimit = require('express-rate-limit');
 
 const config = require('./src/config');
 const logger = require('./src/utils/logger');
-const { JobStore } = require('./src/db/jobStore');
-const { AgentRegistry } = require('./src/db/agentRegistry');
+const { connectDB } = require('./config/db');
 const { buildTestPdf } = require('./src/utils/testPdf');
 const uploadRouter = require('./src/routes/upload');
-const buildPrintJobsRouter = require('./src/routes/printJobs');
+const agentsRouter = require('./routes/agents');
+const printersRouter = require('./routes/printers');
+const printJobsRouter = require('./routes/printJobs');
+const authRouter = require('./routes/auth');
+const filesRouter = require('./routes/files');
 
-const DATA_DIR = path.join(__dirname, 'data');
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const PUBLIC_DIR = path.join(__dirname, 'public');
-fs.mkdirSync(DATA_DIR, { recursive: true });
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 
 // Regenerate the sample test PDF on every boot so its timestamp is fresh.
 fs.writeFileSync(path.join(PUBLIC_DIR, 'sample-test-page.pdf'), buildTestPdf());
-
-const jobStore = new JobStore(path.join(DATA_DIR, 'jobs.json'));
-const agentRegistry = new AgentRegistry();
 
 const app = express();
 app.disable('x-powered-by');
@@ -46,7 +46,6 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
-app.use('/uploads', express.static(UPLOADS_DIR));
 app.use('/public', express.static(PUBLIC_DIR));
 
 app.get('/api/health', (req, res) => {
@@ -57,14 +56,12 @@ app.get('/api/sample-pdf', (req, res) => {
   res.json({ success: true, fileUrl: `${config.publicBaseUrl}/public/sample-test-page.pdf` });
 });
 
-// GET /api/printers - printers currently online across all connected agents,
-// so the mobile page can offer a real printer picker instead of a blind text field.
-app.get('/api/printers', (req, res) => {
-  res.json({ success: true, printers: agentRegistry.listOnlinePrinters() });
-});
-
+app.use('/api/auth', authRouter);
+app.use('/api/agents', agentsRouter);
+app.use('/api/printers', printersRouter);
 app.use('/api/upload', uploadRouter);
-app.use('/api/print-jobs', buildPrintJobsRouter(jobStore, agentRegistry));
+app.use('/api/files', filesRouter);
+app.use('/api/print-jobs', printJobsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, error: 'Not found.' });
@@ -76,8 +73,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: 'Internal server error.' });
 });
 
-app.listen(config.port, () => {
-  logger.info(`Print system backend listening on port ${config.port}`);
-  logger.info(`Public base URL: ${config.publicBaseUrl}`);
-  logger.info(`Configured agents: ${Array.from(config.agentCredentials.keys()).join(', ') || '(none)'}`);
+async function start() {
+  await connectDB(config.mongodbUri);
+  app.listen(config.port, () => {
+    logger.info(`Print system backend listening on port ${config.port}`);
+    logger.info(`Public base URL: ${config.publicBaseUrl}`);
+  });
+}
+
+start().catch((err) => {
+  logger.error(`[server] Failed to start: ${err.message}`);
+  process.exit(1);
 });

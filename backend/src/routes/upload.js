@@ -1,23 +1,11 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
-const crypto = require('crypto');
-const fs = require('fs');
 const config = require('../config');
 const logger = require('../utils/logger');
+const { jwtAuth } = require('../../middleware/auth');
+const storage = require('../../services/storage');
 
 const router = express.Router();
-
-const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const unique = crypto.randomBytes(8).toString('hex');
-    cb(null, `${Date.now()}-${unique}.pdf`);
-  },
-});
 
 function fileFilter(req, file, cb) {
   if (file.mimetype !== 'application/pdf') {
@@ -27,13 +15,13 @@ function fileFilter(req, file, cb) {
 }
 
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   fileFilter,
   limits: { fileSize: config.maxFileSizeMb * 1024 * 1024 },
 });
 
-router.post('/', (req, res) => {
-  upload.single('file')(req, res, (err) => {
+router.post('/', jwtAuth, (req, res) => {
+  upload.single('file')(req, res, async (err) => {
     if (err) {
       if (err.message === 'INVALID_FILE_TYPE') {
         return res.status(400).json({ success: false, error: 'Only PDF files are allowed.' });
@@ -49,14 +37,16 @@ router.post('/', (req, res) => {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No file provided.' });
     }
-    const fileUrl = `${config.publicBaseUrl}/uploads/${req.file.filename}`;
-    logger.info(`[upload] Stored ${req.file.filename} (${req.file.size} bytes)`);
-    res.json({
-      success: true,
-      fileUrl,
-      fileName: req.file.originalname,
-      fileSize: req.file.size,
-    });
+
+    try {
+      const { fileId, size } = await storage.storeFile(req.file.buffer, req.file.originalname, 'application/pdf');
+      const fileUrl = storage.buildSignedUrl(config.publicBaseUrl, fileId);
+      logger.info(`[upload] Stored ${fileId} (${size} bytes)`);
+      res.json({ success: true, fileUrl, fileName: req.file.originalname, fileSize: size });
+    } catch (storeErr) {
+      logger.error('[upload] Failed to store file:', storeErr.message);
+      res.status(500).json({ success: false, error: 'Upload failed.' });
+    }
   });
 });
 

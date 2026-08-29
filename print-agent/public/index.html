@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Local Print Agent</title>
+<title>Remote Print Agent</title>
 <style>
   :root { color-scheme: light dark; }
   body {
@@ -35,6 +35,26 @@
   .dot.green { background: #3fb950; }
   .dot.red { background: #f85149; }
   .dot.gray { background: #6e7681; }
+  h2 { font-size: 13px; color: #8b949e; margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 1px; }
+  .printer-list { list-style: none; margin: 0; padding: 0; }
+  .printer-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #21262d;
+    font-size: 13px;
+  }
+  .printer-list li:last-child { border-bottom: none; }
+  .printer-list button {
+    background: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 12px;
+  }
   .actions { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
   button {
     flex: 1;
@@ -47,15 +67,6 @@
     font-family: inherit;
   }
   button:hover { background: #30363d; }
-  select {
-    width: 100%;
-    padding: 8px;
-    background: #0d1117;
-    color: #c9d1d9;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    margin-top: 6px;
-  }
   #msg { margin-top: 12px; min-height: 20px; font-size: 13px; color: #58a6ff; }
   #logs {
     margin-top: 16px;
@@ -73,21 +84,18 @@
 </head>
 <body>
   <div class="panel">
-    <h1>LOCAL PRINT AGENT</h1>
+    <h1>REMOTE PRINT AGENT</h1>
     <div class="row"><span class="label">Agent ID</span><span class="value" id="agentId">-</span></div>
-    <div class="row"><span class="label">Backend</span><span class="value"><span class="dot gray" id="backendDot"></span><span id="backendText">-</span></span></div>
-    <div class="row"><span class="label">Printer</span><span class="value" id="printerName">-</span></div>
-    <div class="row"><span class="label">Printer Status</span><span class="value"><span class="dot gray" id="printerDot"></span><span id="printerText">-</span></span></div>
+    <div class="row"><span class="label">Cloud</span><span class="value"><span class="dot gray" id="backendDot"></span><span id="backendText">-</span></span></div>
     <div class="row"><span class="label">Last Check</span><span class="value" id="lastCheck">-</span></div>
     <div class="row"><span class="label">Last Job</span><span class="value" id="lastJob">-</span></div>
     <div class="row"><span class="label">Last Print</span><span class="value" id="lastPrint">-</span></div>
     <div class="row"><span class="label">Jobs Printed Today</span><span class="value" id="jobsToday">-</span></div>
 
-    <select id="printerSelect"><option>Loading printers...</option></select>
+    <h2>Detected Printers</h2>
+    <ul class="printer-list" id="printerList"><li>Loading...</li></ul>
 
     <div class="actions">
-      <button id="btnSelect">Use Selected Printer</button>
-      <button id="btnTest">Test Printer</button>
       <button id="btnRefresh">Refresh</button>
       <button id="btnLogs">View Logs</button>
     </div>
@@ -102,29 +110,27 @@ async function refreshStatus() {
   document.getElementById('agentId').textContent = s.agentId || '(not set)';
   document.getElementById('backendDot').className = 'dot ' + (s.backendConnected ? 'green' : 'red');
   document.getElementById('backendText').textContent = s.backendConnected ? 'Connected' : 'Disconnected';
-  document.getElementById('printerName').textContent = s.printerName || '(not configured)';
-  document.getElementById('printerDot').className = 'dot ' + (s.printerReady ? 'green' : 'red');
-  document.getElementById('printerText').textContent = s.printerReady ? 'Ready' : 'Not available';
   document.getElementById('lastCheck').textContent = s.lastCheck ? new Date(s.lastCheck).toLocaleTimeString() : '-';
   document.getElementById('lastJob').textContent = s.lastJobId || '-';
   document.getElementById('lastPrint').textContent = s.lastPrintStatus || '-';
   document.getElementById('jobsToday').textContent = s.jobsPrintedToday;
-}
 
-async function loadPrinters() {
-  const res = await fetch('/api/printers');
-  const data = await res.json();
-  const select = document.getElementById('printerSelect');
-  select.innerHTML = '';
-  if (!data.success || !data.printers.length) {
-    select.innerHTML = '<option>No printers found</option>';
+  const list = document.getElementById('printerList');
+  list.innerHTML = '';
+  if (!s.printers || !s.printers.length) {
+    list.innerHTML = '<li>No printers detected</li>';
     return;
   }
-  data.printers.forEach((name) => {
-    const opt = document.createElement('option');
-    opt.value = name;
-    opt.textContent = name;
-    select.appendChild(opt);
+  s.printers.forEach((name) => {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = name;
+    const btn = document.createElement('button');
+    btn.textContent = 'Test Print';
+    btn.addEventListener('click', () => testPrint(name));
+    li.appendChild(span);
+    li.appendChild(btn);
+    list.appendChild(li);
   });
 }
 
@@ -132,30 +138,21 @@ function setMsg(text) {
   document.getElementById('msg').textContent = text;
 }
 
-document.getElementById('btnRefresh').addEventListener('click', () => {
-  setMsg('Refreshing...');
-  Promise.all([refreshStatus(), loadPrinters()]).then(() => setMsg('Refreshed.'));
-});
-
-document.getElementById('btnSelect').addEventListener('click', async () => {
-  const printerName = document.getElementById('printerSelect').value;
-  setMsg('Saving printer selection...');
-  const res = await fetch('/api/select-printer', {
+async function testPrint(printerName) {
+  setMsg(`Sending test page to "${printerName}"...`);
+  const res = await fetch('/api/test-print', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ printerName }),
   });
   const data = await res.json();
-  setMsg(data.success ? `Printer set to ${printerName}` : data.error);
-  refreshStatus();
-});
-
-document.getElementById('btnTest').addEventListener('click', async () => {
-  setMsg('Sending test page...');
-  const res = await fetch('/api/test-print', { method: 'POST' });
-  const data = await res.json();
   setMsg(data.success ? data.message : data.error);
   refreshStatus();
+}
+
+document.getElementById('btnRefresh').addEventListener('click', () => {
+  setMsg('Refreshing...');
+  refreshStatus().then(() => setMsg('Refreshed.'));
 });
 
 document.getElementById('btnLogs').addEventListener('click', async () => {
@@ -169,7 +166,6 @@ document.getElementById('btnLogs').addEventListener('click', async () => {
 });
 
 refreshStatus();
-loadPrinters();
 setInterval(refreshStatus, 4000);
 </script>
 </body>
