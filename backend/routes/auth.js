@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { jwtAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -58,6 +59,25 @@ router.post('/login', async (req, res) => {
   }
 
   res.json({ success: true, token: issueToken(user), user: publicUser(user) });
+});
+
+// POST /api/auth/change-password
+router.post('/change-password', jwtAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword || newPassword.length < 8) {
+    return res
+      .status(400)
+      .json({ success: false, error: 'currentPassword and a newPassword (min 8 chars) are required.' });
+  }
+
+  const user = await User.findById(req.user.sub);
+  if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    return res.status(401).json({ success: false, error: 'Current password is incorrect.' });
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, 10);
+  await user.save();
+  res.json({ success: true });
 });
 
 module.exports = router;
