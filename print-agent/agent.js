@@ -212,10 +212,19 @@ async function pollOnce() {
     }
 
     logger.log('Checking jobs');
-    const job = await cloud.getPendingJob();
-    state.lastCheck = new Date().toISOString();
-    if (job) {
-      await handleJob(job);
+    try {
+      const job = await cloud.getPendingJob();
+      state.lastCheck = new Date().toISOString();
+      if (job) {
+        await handleJob(job);
+      }
+    } catch (err) {
+      // A transient network error here (e.g. the connection resetting
+      // mid-request) must never take the whole agent process down - it's
+      // meant to run unattended indefinitely. Log it and try again next
+      // poll cycle instead.
+      state.lastCheck = new Date().toISOString();
+      logger.log(`Cloud connection unavailable while checking jobs (${err.message})`);
     }
   } finally {
     polling = false;
@@ -224,9 +233,15 @@ async function pollOnce() {
 
 function scheduleLoop() {
   if (stopped) return;
-  pollOnce().finally(() => {
-    if (!stopped) setTimeout(scheduleLoop, cfg.pollInterval);
-  });
+  // Safety net on top of pollOnce()'s own error handling: this agent is
+  // meant to run unattended for days, so no single unanticipated error
+  // should ever be allowed to crash the process and silently take every
+  // printer on this PC offline until someone notices and restarts it.
+  pollOnce()
+    .catch((err) => logger.log(`Unexpected error in poll loop (${err.message})`))
+    .finally(() => {
+      if (!stopped) setTimeout(scheduleLoop, cfg.pollInterval);
+    });
 }
 
 async function start() {
