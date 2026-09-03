@@ -19,6 +19,11 @@ function readConfig() {
     // leave unset for the legacy standalone/personal-use behavior (default,
     // and how this real PC's existing agent keeps working untouched).
     shopId: process.env.SHOP_ID || null,
+    // Optional. A one-time pairing code from the shop owner's dashboard,
+    // used instead of SHOP_ID on first run - never persisted, only read
+    // once during registration. Leave unset to be prompted interactively
+    // (spec section 45) or to register standalone.
+    pairingCode: process.env.PAIRING_CODE || null,
     // Issued by POST /api/agents/register on first run and persisted here -
     // never hand-set. See agent.js ensureRegistered().
     agentToken: process.env.PRINT_AGENT_TOKEN || '',

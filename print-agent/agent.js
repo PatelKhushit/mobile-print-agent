@@ -18,9 +18,38 @@ let stopped = false;
 let cachedDiscovered = []; // [{ localPrinterName, protocol, address, model }]
 
 /**
- * First-run flow from spec section 8: register once, get a secret token
+ * Interactive pairing-code prompt (spec section 45) - only engages when
+ * running attached to a real console (not the hidden/service launcher) and
+ * no shopId/PAIRING_CODE is already configured. Times out to a plain
+ * standalone registration rather than hanging startup forever if nobody's
+ * watching the console.
+ */
+function promptForPairingCode(timeoutMs = 20000) {
+  if (!process.stdin.isTTY) return Promise.resolve(null);
+  const readline = require('readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    function finish(value) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      rl.close();
+      resolve(value);
+    }
+    rl.question('Shop pairing code (from the shop dashboard), or press Enter to skip: ', (answer) =>
+      finish(answer.trim() || null)
+    );
+  });
+}
+
+/**
+ * First-run flow from spec section 8/45: register once, get a secret token
  * back, store it locally. Every run after the first just reuses the saved
- * token - nothing is ever hardcoded.
+ * token - nothing is ever hardcoded. A literal SHOP_ID (legacy/scripted
+ * setups) always wins over prompting; otherwise an interactive console
+ * gets up to 3 tries at a pairing code before falling back to standalone.
  */
 async function ensureRegistered() {
   cfg = readConfig();
@@ -28,11 +57,46 @@ async function ensureRegistered() {
   if (!cfg.agentId) {
     throw new Error('PRINT_AGENT_ID is not set in .env');
   }
-  logger.log(`Registering agent "${cfg.agentId}"${cfg.shopId ? ` (shop ${cfg.shopId})` : ''} with backend...`);
-  const result = await cloud.register(cfg.agentId, cfg.agentId, cfg.shopId);
-  saveEnvValue('PRINT_AGENT_TOKEN', result.token);
-  cfg = readConfig();
-  logger.log('Agent registered and token saved to .env');
+
+  if (cfg.shopId) {
+    logger.log(`Registering agent "${cfg.agentId}" (shop ${cfg.shopId}) with backend...`);
+    const result = await cloud.register(cfg.agentId, cfg.agentId, cfg.shopId, null);
+    saveEnvValue('PRINT_AGENT_TOKEN', result.token);
+    cfg = readConfig();
+    logger.log('Agent registered and token saved to .env');
+    return;
+  }
+
+  let pairingCode = cfg.pairingCode;
+  const interactive = !pairingCode && process.stdin.isTTY;
+  const maxAttempts = interactive ? 3 : 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (interactive && !pairingCode) {
+      pairingCode = await promptForPairingCode();
+    }
+    try {
+      logger.log(
+        pairingCode
+          ? `Registering agent "${cfg.agentId}" with pairing code...`
+          : `Registering agent "${cfg.agentId}" as standalone (no shop)...`
+      );
+      const result = await cloud.register(cfg.agentId, cfg.agentId, null, pairingCode);
+      saveEnvValue('PRINT_AGENT_TOKEN', result.token);
+      if (result.shopId) saveEnvValue('SHOP_ID', result.shopId);
+      cfg = readConfig();
+      logger.log(`Agent registered and token saved to .env${result.shopId ? ` (paired to shop ${result.shopId})` : ''}`);
+      return;
+    } catch (err) {
+      const serverMsg = err.response && err.response.data && err.response.data.error;
+      if (pairingCode && interactive && serverMsg && attempt < maxAttempts) {
+        logger.log(`Pairing failed: ${serverMsg} Try again.`);
+        pairingCode = null;
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 /** Printer names conventionally start with the brand - a reasonable,

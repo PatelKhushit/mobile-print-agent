@@ -18,15 +18,33 @@ const router = express.Router();
  * The plaintext token is only ever shown in this response, never stored.
  */
 router.post('/register', async (req, res) => {
-  const { agentId, name, shopId } = req.body || {};
+  const { agentId, name, shopId: rawShopId, pairingCode } = req.body || {};
   if (!agentId || typeof agentId !== 'string') {
     return res.status(400).json({ success: false, error: 'agentId is required.' });
   }
 
-  // Absent shopId = legacy standalone agent, unchanged behavior. Present
-  // shopId must reference a real, active shop - an agent can't pair itself
-  // to a shop that doesn't exist or has been suspended.
-  if (shopId) {
+  let shopId = rawShopId || null;
+
+  // A pairing code (spec section 45) resolves to a shop and is consumed
+  // (single-use, so it can't be replayed) here rather than the shop owner
+  // ever handing out the raw shopId. Takes precedence over a literal
+  // shopId if a caller somehow sent both.
+  if (pairingCode) {
+    const shop = await Shop.findOne({ pairingCode, pairingCodeExpiresAt: { $gt: new Date() } });
+    if (!shop) {
+      return res.status(400).json({ success: false, error: 'Invalid or expired pairing code.' });
+    }
+    if (shop.status !== 'active') {
+      return res.status(403).json({ success: false, error: `Shop "${shop.shopId}" is not active.` });
+    }
+    shop.pairingCode = null;
+    shop.pairingCodeExpiresAt = null;
+    await shop.save();
+    shopId = shop.shopId;
+  } else if (shopId) {
+    // Absent shopId/pairingCode = legacy standalone agent, unchanged
+    // behavior. A literal shopId must reference a real, active shop - an
+    // agent can't pair itself to a shop that doesn't exist or is suspended.
     const shop = await Shop.findOne({ shopId });
     if (!shop) return res.status(404).json({ success: false, error: `Shop "${shopId}" not found.` });
     if (shop.status !== 'active') {
@@ -38,8 +56,9 @@ router.post('/register', async (req, res) => {
   const tokenHash = await bcrypt.hash(token, 10);
 
   const update = { agentId, name: name || agentId, tokenHash, status: 'offline' };
-  // Only touch shopId when the caller actually supplied one - re-registering
-  // without SHOP_ID set must never silently unpair an already-paired agent.
+  // Only touch shopId when the caller actually supplied one (directly or
+  // via pairing code) - re-registering with neither set must never
+  // silently unpair an already-paired agent.
   if (shopId) update.shopId = shopId;
 
   const agent = await Agent.findOneAndUpdate({ agentId }, update, {

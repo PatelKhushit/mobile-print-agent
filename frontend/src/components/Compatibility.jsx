@@ -13,9 +13,11 @@ export default function Compatibility({ onBack }) {
       <ul className="compat-list">
         <li>
           <strong>Any printer with a Windows driver installed</strong> on the PC running the Print Agent -
-          USB, network-shared, or virtual. Brand doesn't matter (Canon, HP, Epson, Brother, Zebra/POS label
-          printers, etc.) because the agent goes through the printer's own Windows driver, not a
-          brand-specific SDK. Detected automatically from the list of installed Windows printers.
+          USB, Bluetooth, network-shared, or virtual. Brand doesn't matter (Canon, HP, Epson, Brother,
+          Zebra/POS label printers, etc.) because the agent goes through the printer's own Windows driver,
+          not a brand-specific SDK. This also covers Bluetooth printers: once paired in Windows and
+          installed as a normal Windows printer, they're indistinguishable from a USB printer to the agent.
+          Detected automatically from the list of installed Windows printers.
         </li>
         <li>
           <strong>Real network printers speaking IPP or IPPS</strong> (the standard Internet Printing
@@ -28,7 +30,6 @@ export default function Compatibility({ onBack }) {
 
       <h2 className="compat-heading">✕ Not supported</h2>
       <ul className="compat-list">
-        <li>Bluetooth-only printers (no Bluetooth pairing/stack in this system).</li>
         <li>
           Printers that only accept a vendor's proprietary cloud-print API rather than standard IPP/IPPS.
         </li>

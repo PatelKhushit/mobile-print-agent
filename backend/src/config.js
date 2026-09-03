@@ -10,6 +10,10 @@ const config = {
   corsOrigin: process.env.CORS_ORIGIN || '*',
   mongodbUri: process.env.MONGODB_URI || '',
   maxFileSizeMb: parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 10,
+  // Safety-net max age for an uploaded document that never reached a clean
+  // terminal job state (normal completed/failed/cancelled jobs delete their
+  // file immediately - see services/printQueue.js cleanupJobFile).
+  fileRetentionHours: parseInt(process.env.FILE_RETENTION_HOURS, 10) || 48,
   jobClaimTimeoutMs: parseInt(process.env.JOB_CLAIM_TIMEOUT_MS, 10) || 120000,
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 60000,
   rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX, 10) || 120,

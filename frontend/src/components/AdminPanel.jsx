@@ -273,7 +273,7 @@ function ShopsTab() {
               <tr>
                 <th>Shop</th>
                 <th>Status</th>
-                <th>Agent</th>
+                <th>Agents</th>
                 <th>Printers</th>
                 <th>Jobs Today</th>
                 <th>Actions</th>
@@ -287,7 +287,7 @@ function ShopsTab() {
                     <small className="printer-location"> · {s.shopId}</small>
                   </td>
                   <td>{s.status === 'active' ? '🟢 Active' : '⚪ Suspended'}</td>
-                  <td>{s.agent ? (s.agent.status === 'online' ? '🟢 Online' : '🔴 Offline') : '— Not paired'}</td>
+                  <td>{s.agents.total === 0 ? '— Not paired' : `${s.agents.online}/${s.agents.total} online`}</td>
                   <td>
                     {s.printers.online}/{s.printers.total} online
                   </td>

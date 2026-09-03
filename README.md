@@ -205,7 +205,7 @@ Super Admin (you)
       ▼
    Shop (own QR code, own owner login, own printers/jobs)
       │
-      ├── Print Agent, paired via SHOP_ID
+      ├── Print Agent(s), paired via a one-time pairing code (or SHOP_ID)
       │        └── that shop's printers only
       │
       └── Customers scan the shop's QR → guest session → upload PDF →
@@ -226,20 +226,23 @@ in one call. The shop owner signs in on the regular login page and lands
 on their own dashboard (QR download, printers, print history) instead of
 the personal print page.
 
-**2. Pair a Print Agent to that shop** - add one line to that agent's
-`print-agent/.env`:
+**2. Pair a Print Agent to that shop.** The shop owner's dashboard has a
+setup guide for this (**Connect New Print Agent** → generates a short,
+one-time pairing code like `K7M-492-XQ2`, valid 15 minutes). Run the
+Print Agent from a real console for the first time and it will prompt for
+the code interactively - enter it, and the agent registers itself to that
+shop automatically. A shop isn't limited to one agent; generate a new
+code and connect another PC the same way.
 
-```text
-SHOP_ID=SHOP-001
-```
-
-then delete `PRINT_AGENT_TOKEN` from the same file and restart the agent
-to force re-registration under the shop. Leave `SHOP_ID` blank (the
-default) to keep an agent as personal/standalone - it never touches shop
-data either way. **A shop's printers, agent, and jobs are only ever
-visible to that shop's own dashboard, the super admin, and customers who
-scanned that shop's own QR** - enforced server-side, not just hidden in
-the UI.
+For scripted/headless setups, the equivalent is setting `PAIRING_CODE=` in
+`print-agent/.env` before first run, or the older direct route - add
+`SHOP_ID=SHOP-001` to `.env`, delete `PRINT_AGENT_TOKEN` from the same
+file, and restart to force re-registration under the shop. Leave both
+`SHOP_ID` and `PAIRING_CODE` blank (the default) to keep an agent as
+personal/standalone - it never touches shop data either way. **A shop's
+printers, agents, and jobs are only ever visible to that shop's own
+dashboard, the super admin, and customers who scanned that shop's own
+QR** - enforced server-side, not just hidden in the UI.
 
 **3. Customers print without any login**: scanning the shop's QR opens
 `/print/shop/:shopId?t=<token>`, which exchanges the QR's token for a

@@ -12,6 +12,7 @@ const config = require('./src/config');
 const logger = require('./src/utils/logger');
 const { connectDB } = require('./config/db');
 const { buildTestPdf } = require('./src/utils/testPdf');
+const storage = require('./services/storage');
 const uploadRouter = require('./src/routes/upload');
 const agentsRouter = require('./routes/agents');
 const printersRouter = require('./routes/printers');
@@ -77,8 +78,27 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: 'Internal server error.' });
 });
 
+/** Runs on boot and then every hour - catches uploads whose job never
+ * reached a clean terminal state (spec section 22/47: bounded retention,
+ * not "keep forever"). Individual job completion/failure/cancellation
+ * already deletes its own file immediately; this is only the backstop. */
+function scheduleFileRetentionSweep() {
+  const retentionMs = config.fileRetentionHours * 60 * 60 * 1000;
+  const sweep = async () => {
+    try {
+      const deleted = await storage.pruneOrphanedFiles(retentionMs);
+      if (deleted > 0) logger.info(`[cleanup] Pruned ${deleted} upload(s) older than ${config.fileRetentionHours}h`);
+    } catch (err) {
+      logger.warn(`[cleanup] File retention sweep failed: ${err.message}`);
+    }
+  };
+  sweep();
+  setInterval(sweep, 60 * 60 * 1000);
+}
+
 async function start() {
   await connectDB(config.mongodbUri);
+  scheduleFileRetentionSweep();
   app.listen(config.port, () => {
     logger.info(`Print system backend listening on port ${config.port}`);
     logger.info(`Public base URL: ${config.publicBaseUrl}`);

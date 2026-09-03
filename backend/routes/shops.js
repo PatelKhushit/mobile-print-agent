@@ -46,17 +46,21 @@ async function buildQrPayload(shop) {
   return { qrUrl, qrDataUrl };
 }
 
+// A shop can have more than one Print Agent (spec section 41: "1 Shop ->
+// Agent 1, Agent 2"), so agentsByShop maps to an array, not a single agent.
 async function shopSummary(shop, agentsByShop, printersByShop, jobsTodayByShop) {
-  const agent = agentsByShop.get(shop.shopId) || null;
-  const agentOnline = !!(agent && agent.lastSeenAt && Date.now() - new Date(agent.lastSeenAt).getTime() < ONLINE_WINDOW_MS);
+  const agents = agentsByShop.get(shop.shopId) || [];
+  const agentsOnline = agents.filter(
+    (a) => a.lastSeenAt && Date.now() - new Date(a.lastSeenAt).getTime() < ONLINE_WINDOW_MS
+  ).length;
   const printers = printersByShop.get(shop.shopId) || [];
-  const agentsById = new Map(agent ? [[agent.agentId, agent]] : []);
+  const agentsById = new Map(agents.map((a) => [a.agentId, a]));
   const onlinePrinters = await Promise.all(printers.map((p) => computeStatus(p, agentsById)));
   const jobs = jobsTodayByShop.get(shop.shopId) || { total: 0, completed: 0, failed: 0 };
 
   return {
     ...publicShop(shop),
-    agent: agent ? { agentId: agent.agentId, status: agentOnline ? 'online' : 'offline', lastSeenAt: agent.lastSeenAt } : null,
+    agents: { total: agents.length, online: agentsOnline },
     printers: { total: printers.length, online: onlinePrinters.filter((s) => s === 'online').length },
     jobsToday: jobs,
   };
@@ -118,7 +122,11 @@ adminRouter.get('/', jwtAuth, requireAdmin, async (req, res) => {
     PrintJob.find({ shopId: { $in: shopIds }, createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } }).lean(),
   ]);
 
-  const agentsByShop = new Map(agents.map((a) => [a.shopId, a]));
+  const agentsByShop = new Map();
+  for (const a of agents) {
+    if (!agentsByShop.has(a.shopId)) agentsByShop.set(a.shopId, []);
+    agentsByShop.get(a.shopId).push(a);
+  }
   const printersByShop = new Map();
   for (const p of printers) {
     if (!printersByShop.has(p.shopId)) printersByShop.set(p.shopId, []);
@@ -247,20 +255,38 @@ ownerRouter.get('/printers', jwtAuth, requireShopOwner, async (req, res) => {
   res.json({ success: true, printers: result });
 });
 
-ownerRouter.get('/agent', jwtAuth, requireShopOwner, async (req, res) => {
-  const agent = await Agent.findOne({ shopId: req.user.shopId }).lean();
-  if (!agent) return res.json({ success: true, agent: null });
-  const online = !!(agent.lastSeenAt && Date.now() - new Date(agent.lastSeenAt).getTime() < ONLINE_WINDOW_MS);
-  res.json({
-    success: true,
-    agent: {
+// POST /api/shop/agent/pairing-code - generates a fresh single-use code
+// (spec section 45), replacing any code this shop previously generated.
+// The plaintext code is only ever shown here - the agent redeems and
+// invalidates it via POST /api/agents/register.
+const PAIRING_CODE_TTL_MS = 15 * 60 * 1000;
+ownerRouter.post('/agent/pairing-code', jwtAuth, requireShopOwner, async (req, res) => {
+  const shop = await Shop.findOne({ shopId: req.user.shopId });
+  if (!shop) return res.status(404).json({ success: false, error: 'Shop not found.' });
+
+  shop.pairingCode = Shop.generatePairingCode();
+  shop.pairingCodeExpiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS);
+  await shop.save();
+
+  logger.info(`[shops] Pairing code generated for ${shop.shopId}`);
+  res.json({ success: true, pairingCode: shop.pairingCode, expiresAt: shop.pairingCodeExpiresAt });
+});
+
+// GET /api/shop/agents - every Print Agent paired to this shop (spec
+// section 41: a shop isn't limited to exactly one agent).
+ownerRouter.get('/agents', jwtAuth, requireShopOwner, async (req, res) => {
+  const agents = await Agent.find({ shopId: req.user.shopId }).sort({ createdAt: 1 }).lean();
+  const result = agents.map((agent) => {
+    const online = !!(agent.lastSeenAt && Date.now() - new Date(agent.lastSeenAt).getTime() < ONLINE_WINDOW_MS);
+    return {
       agentId: agent.agentId,
       status: online ? 'online' : 'offline',
       lastSeenAt: agent.lastSeenAt,
       printers: agent.printers,
       version: agent.version,
-    },
+    };
   });
+  res.json({ success: true, agents: result });
 });
 
 ownerRouter.get('/jobs', jwtAuth, requireShopOwner, async (req, res) => {

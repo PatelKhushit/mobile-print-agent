@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
-import { adminTestPrint, getMyShop, getMyShopAgent, getMyShopJobs, getMyShopPrinters } from '../api';
+import {
+  adminTestPrint,
+  generateAgentPairingCode,
+  getMyShop,
+  getMyShopAgents,
+  getMyShopJobs,
+  getMyShopPrinters,
+} from '../api';
+import SetupWizard from './SetupWizard';
 
 const PRINTER_STATUS_LABEL = {
   online: '🟢 Online',
@@ -27,24 +35,28 @@ const RESULT_LABEL = {
 export default function ShopDashboard({ onBack }) {
   const [shop, setShop] = useState(null);
   const [qrDataUrl, setQrDataUrl] = useState('');
-  const [agent, setAgent] = useState(null);
+  const [agents, setAgents] = useState([]);
   const [printers, setPrinters] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState('');
+  const [pairing, setPairing] = useState(null); // { pairingCode, expiresAt }
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [showWizard, setShowWizard] = useState(false);
 
   async function load() {
     try {
-      const [me, printerList, agentInfo, jobList] = await Promise.all([
+      const [me, printerList, agentList, jobList] = await Promise.all([
         getMyShop(),
         getMyShopPrinters(),
-        getMyShopAgent(),
+        getMyShopAgents(),
         getMyShopJobs(30),
       ]);
       setShop(me.shop);
       setQrDataUrl(me.qrDataUrl);
       setPrinters(printerList);
-      setAgent(agentInfo);
+      setAgents(agentList);
       setJobs(jobList);
     } catch (err) {
       setMsg(err.response?.data?.error || 'Failed to load shop dashboard.');
@@ -58,6 +70,31 @@ export default function ShopDashboard({ onBack }) {
     const timer = setInterval(load, 10000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!pairing) return undefined;
+    const tick = () => {
+      const left = Math.max(0, Math.round((new Date(pairing.expiresAt).getTime() - Date.now()) / 1000));
+      setSecondsLeft(left);
+      if (left === 0) setPairing(null);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [pairing]);
+
+  async function handleGeneratePairingCode() {
+    setPairingBusy(true);
+    setMsg('');
+    try {
+      const result = await generateAgentPairingCode();
+      setPairing({ pairingCode: result.pairingCode, expiresAt: result.expiresAt });
+    } catch (err) {
+      setMsg(err.response?.data?.error || 'Could not generate a pairing code.');
+    } finally {
+      setPairingBusy(false);
+    }
+  }
 
   async function handleTestPrint(printer) {
     setMsg(`Sending test print to ${printer.name}...`);
@@ -90,35 +127,77 @@ export default function ShopDashboard({ onBack }) {
     );
   }
 
+  const setupIncomplete = agents.length === 0 || printers.length === 0;
+
   return (
     <div className="card admin-card">
       <h1>{shop.shopName.toUpperCase()}</h1>
       <div className="hint">Shop ID: {shop.shopId}</div>
 
-      <div className="field">
-        <span>Shop QR - place this outside your shop</span>
-        {qrDataUrl && <img src={qrDataUrl} alt="Shop QR code" style={{ width: 200, height: 200, marginTop: 8 }} />}
-        <div className="footer-links">
-          {qrDataUrl && (
-            <a className="link-btn" href={qrDataUrl} download={`${shop.shopId}-qr.png`}>
-              Download QR
-            </a>
+      {setupIncomplete || showWizard ? (
+        <>
+          <h1>SETUP</h1>
+          <SetupWizard
+            agents={agents}
+            printers={printers}
+            qrDataUrl={qrDataUrl}
+            shopId={shop.shopId}
+            pairing={pairing}
+            pairingBusy={pairingBusy}
+            secondsLeft={secondsLeft}
+            onGeneratePairingCode={handleGeneratePairingCode}
+            onTestPrint={handleTestPrint}
+            testPrintMsg={msg}
+          />
+          {!setupIncomplete && (
+            <button className="link-btn" onClick={() => setShowWizard(false)}>
+              Hide setup guide
+            </button>
           )}
-        </div>
-      </div>
+        </>
+      ) : (
+        <>
+          <div className="field">
+            <span>Shop QR - place this outside your shop</span>
+            {qrDataUrl && <img src={qrDataUrl} alt="Shop QR code" style={{ width: 200, height: 200, marginTop: 8 }} />}
+            <div className="footer-links">
+              {qrDataUrl && (
+                <a className="link-btn" href={qrDataUrl} download={`${shop.shopId}-qr.png`}>
+                  Download QR
+                </a>
+              )}
+            </div>
+          </div>
 
-      <div className="field">
-        <span>Print Agent</span>
-        <div>
-          {agent ? (
-            <>
-              {agent.status === 'online' ? '🟢 Online' : '🔴 Offline'} ({agent.agentId})
-            </>
-          ) : (
-            '⚪ Not paired yet - add SHOP_ID to the Print Agent .env on your shop PC'
-          )}
-        </div>
-      </div>
+          <div className="field">
+            <span>Print Agent{agents.length > 1 ? 's' : ''}</span>
+            <ul className="agent-list">
+              {agents.map((a) => (
+                <li key={a.agentId}>
+                  {a.status === 'online' ? '🟢 Online' : '🔴 Offline'} ({a.agentId})
+                </li>
+              ))}
+            </ul>
+
+            {pairing ? (
+              <div className="pairing-code-box">
+                <div className="pairing-code">{pairing.pairingCode}</div>
+                <small>
+                  Enter this code in the Print Agent when it asks for a pairing code. Expires in{' '}
+                  {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, '0')}.
+                </small>
+              </div>
+            ) : (
+              <button className="link-btn" onClick={handleGeneratePairingCode} disabled={pairingBusy}>
+                {pairingBusy ? 'Generating...' : '+ Connect another Print Agent'}
+              </button>
+            )}
+            <button className="link-btn" onClick={() => setShowWizard(true)}>
+              Show setup guide
+            </button>
+          </div>
+        </>
+      )}
 
       <h1>MY PRINTERS</h1>
       {printers.length === 0 ? (

@@ -1,6 +1,22 @@
 const crypto = require('crypto');
 const PrintJob = require('../models/PrintJob');
+const storage = require('./storage');
+const config = require('../src/config');
 const logger = require('../src/utils/logger');
+
+/** Best-effort delete of a job's uploaded document once it reaches a
+ * terminal state (spec section 47) - never lets a storage error affect
+ * the job status transition itself. No-ops for non-GridFS URLs (the
+ * shared sample test-print PDF, or any external fileUrl). */
+async function cleanupJobFile(job) {
+  const fileId = storage.extractFileId(job.fileUrl, config.publicBaseUrl);
+  if (!fileId) return;
+  try {
+    await storage.deleteFile(fileId);
+  } catch (err) {
+    logger.warn(`[printQueue] Could not delete stored file for ${job.jobId}: ${err.message}`);
+  }
+}
 
 function generateJobId() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -147,12 +163,15 @@ const markDownloading = (jobId, agentId) =>
 const markPrinting = (jobId, agentId) =>
   transition(jobId, agentId, { from: ['assigned', 'downloading'], to: 'printing', extraFields: { printingAt: new Date() } });
 
-const markCompleted = (jobId, agentId) =>
-  transition(jobId, agentId, {
+async function markCompleted(jobId, agentId) {
+  const result = await transition(jobId, agentId, {
     from: ['assigned', 'downloading', 'printing'],
     to: 'completed',
     extraFields: { completedAt: new Date() },
   });
+  if (result.job && result.job.status === 'completed') await cleanupJobFile(result.job);
+  return result;
+}
 
 /** Fails permanently, or requeues for another attempt if retries remain. */
 async function markFailed(jobId, agentId, errorMessage) {
@@ -171,6 +190,7 @@ async function markFailed(jobId, agentId, errorMessage) {
     job.completedAt = new Date();
   }
   await job.save();
+  if (job.status === 'failed') await cleanupJobFile(job);
   return { job };
 }
 
@@ -197,6 +217,7 @@ async function cancelJob(jobId, { requesterUserId, requesterSessionId, isAdmin }
   job.status = 'cancelled';
   job.completedAt = new Date();
   await job.save();
+  await cleanupJobFile(job);
   return { job };
 }
 

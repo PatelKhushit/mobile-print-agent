@@ -1,6 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { createPrintJob, getAvailablePrinters, getSamplePdfUrl, uploadPdf } from '../api';
 import JobStatus from './JobStatus';
+
+// Lazy: pdfjs-dist is a large dependency (~750KB + a 1.2MB worker) that most
+// visits to this mobile-first page never need (browsing printers, logging
+// in, checking a job's status) - only fetched once a document is actually
+// uploaded and there's something to preview.
+const PdfPreview = lazy(() => import('./PdfPreview'));
 
 const STATUS_LABEL = {
   online: '🟢 Online',
@@ -16,6 +22,11 @@ const STATUS_LABEL = {
  * section 32/83). Sharing one component keeps the actual print flow - the
  * part that must never behave differently for the two audiences - in
  * exactly one place.
+ *
+ * Flow mirrors spec section 1: upload happens as soon as a file is picked
+ * (so the customer sees a preview/page count right away, not after
+ * clicking Print), then printer + options, then a final review screen
+ * before anything is actually queued (spec section 17).
  */
 export default function PrintTest({
   onLogout,
@@ -37,8 +48,15 @@ export default function PrintTest({
   const [copies, setCopies] = useState(1);
   const [color, setColor] = useState(false);
   const [paperSize, setPaperSize] = useState('');
+  const [orientation, setOrientation] = useState('portrait');
   const [duplex, setDuplex] = useState(false);
+
   const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadedDoc, setUploadedDoc] = useState(null); // { fileUrl, fileName, fileSize, pageCount }
+  const [uploadError, setUploadError] = useState('');
+
+  const [step, setStep] = useState('select'); // 'select' | 'summary'
   const [status, setStatus] = useState('Waiting...');
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState(null);
@@ -73,8 +91,35 @@ export default function PrintTest({
   function reset() {
     setJobId(null);
     setStatus('Waiting...');
+    setStep('select');
+    clearFile();
+  }
+
+  function clearFile() {
     setFile(null);
+    setUploadedDoc(null);
+    setUploadError('');
     if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function handleFileChange(e) {
+    const picked = e.target.files?.[0] || null;
+    setFile(picked);
+    setUploadedDoc(null);
+    setUploadError('');
+    if (!picked) return;
+
+    setUploading(true);
+    try {
+      const result = await uploadFile(picked);
+      setUploadedDoc(result);
+    } catch (err) {
+      setUploadError(err.response?.data?.error || 'Upload failed. Please try again.');
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } finally {
+      setUploading(false);
+    }
   }
 
   const selectedPrinter = printers.find((p) => p.printerId === printerId);
@@ -95,24 +140,24 @@ export default function PrintTest({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [printerId, caps.color, caps.duplex, paperSizes && paperSizes.join('|')]);
 
-  async function handleTestPrint() {
+  function goToSummary() {
     if (!printerId) {
       setStatus('Select a printer first.');
       return;
     }
-    if (!file && !allowSamplePdf) {
-      setStatus('Select a PDF to print.');
+    if (!uploadedDoc && !allowSamplePdf) {
+      setStatus('Select a document to print.');
       return;
     }
-    setBusy(true);
     setStatus('Waiting...');
+    setStep('summary');
+  }
+
+  async function handleConfirmPrint() {
+    setBusy(true);
     try {
-      let fileUrl;
-      if (file) {
-        setStatus('Uploading PDF...');
-        const result = await uploadFile(file);
-        fileUrl = result.fileUrl;
-      } else {
+      let fileUrl = uploadedDoc?.fileUrl;
+      if (!fileUrl) {
         setStatus('Preparing test PDF...');
         fileUrl = await getSamplePdfUrl();
       }
@@ -124,6 +169,7 @@ export default function PrintTest({
         copies,
         color: supportsColor && color,
         paperSize: paperSizes ? paperSize : undefined,
+        orientation,
         duplex: supportsDuplex && duplex,
       });
       setJobId(result.jobId);
@@ -146,10 +192,107 @@ export default function PrintTest({
     );
   }
 
+  if (step === 'summary') {
+    const docLabel = uploadedDoc ? uploadedDoc.fileName : 'Sample test page';
+    return (
+      <div className="card">
+        <h1>{title}</h1>
+        {subtitle && <div className="hint">{subtitle}</div>}
+
+        <div className="summary-card">
+          <div className="summary-row">
+            <span>Document</span>
+            <strong>{docLabel}</strong>
+          </div>
+          {uploadedDoc?.pageCount && (
+            <div className="summary-row">
+              <span>Pages</span>
+              <strong>{uploadedDoc.pageCount}</strong>
+            </div>
+          )}
+          <div className="summary-row">
+            <span>Printer</span>
+            <strong>{selectedPrinter?.name || printerId}</strong>
+          </div>
+          <div className="summary-row">
+            <span>Color</span>
+            <strong>{supportsColor && color ? 'Color' : 'Black & White'}</strong>
+          </div>
+          {paperSizes && (
+            <div className="summary-row">
+              <span>Paper</span>
+              <strong>{paperSize}</strong>
+            </div>
+          )}
+          <div className="summary-row">
+            <span>Copies</span>
+            <strong>{copies}</strong>
+          </div>
+          <div className="summary-row">
+            <span>Orientation</span>
+            <strong>{orientation === 'landscape' ? 'Landscape' : 'Portrait'}</strong>
+          </div>
+          {supportsDuplex && (
+            <div className="summary-row">
+              <span>Duplex</span>
+              <strong>{duplex ? 'Double-sided' : 'Single-sided'}</strong>
+            </div>
+          )}
+        </div>
+
+        <button className="primary-btn" onClick={handleConfirmPrint} disabled={busy}>
+          {busy ? 'Sending...' : 'PRINT NOW'}
+        </button>
+        <button className="link-btn" onClick={() => setStep('select')} disabled={busy}>
+          ← Edit options
+        </button>
+
+        {status && status !== 'Waiting...' && <div className="status-line">{status}</div>}
+      </div>
+    );
+  }
+
   return (
     <div className="card">
       <h1>{title}</h1>
       {subtitle && <div className="hint">{subtitle}</div>}
+
+      <label className="field">
+        <span>Document</span>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/pdf,image/jpeg,image/png"
+          onChange={handleFileChange}
+          disabled={uploading}
+        />
+        {uploading && <small>Uploading...</small>}
+        {!uploading && uploadError && <small className="field-error">{uploadError}</small>}
+        {!uploading && !uploadError && file && uploadedDoc && (
+          <div className="uploaded-file">
+            <small>
+              {uploadedDoc.fileName} ({(uploadedDoc.fileSize / 1024 / 1024).toFixed(2)} MB
+              {uploadedDoc.pageCount ? `, ${uploadedDoc.pageCount} page${uploadedDoc.pageCount === 1 ? '' : 's'}` : ''})
+            </small>
+            <button type="button" className="link-btn" onClick={clearFile}>
+              Remove
+            </button>
+          </div>
+        )}
+        {!uploading && !file && (
+          <small>
+            {allowSamplePdf
+              ? 'No file selected - a generated test PDF will be used.'
+              : 'Select the PDF, JPG, or PNG you want printed.'}
+          </small>
+        )}
+      </label>
+
+      {uploadedDoc && (
+        <Suspense fallback={null}>
+          <PdfPreview fileUrl={uploadedDoc.fileUrl} pageCount={uploadedDoc.pageCount} />
+        </Suspense>
+      )}
 
       <label className="field">
         <span>Printer</span>
@@ -228,6 +371,14 @@ export default function PrintTest({
         </label>
       )}
 
+      <label className="field">
+        <span>Orientation</span>
+        <select value={orientation} onChange={(e) => setOrientation(e.target.value)}>
+          <option value="portrait">Portrait</option>
+          <option value="landscape">Landscape</option>
+        </select>
+      </label>
+
       {supportsDuplex && (
         <label className="field">
           <span>Duplex (double-sided)</span>
@@ -238,25 +389,12 @@ export default function PrintTest({
         </label>
       )}
 
-      <label className="field">
-        <span>Document</span>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/pdf"
-          onChange={(e) => setFile(e.target.files?.[0] || null)}
-        />
-        {!file && (
-          <small>{allowSamplePdf ? 'No file selected - a generated test PDF will be used.' : 'Select the PDF you want printed.'}</small>
-        )}
-      </label>
-
       <button
         className="primary-btn"
-        onClick={handleTestPrint}
-        disabled={busy || !printerId || selectedPrinter?.status !== 'online' || (!file && !allowSamplePdf)}
+        onClick={goToSummary}
+        disabled={busy || uploading || !printerId || selectedPrinter?.status !== 'online' || (!uploadedDoc && !allowSamplePdf)}
       >
-        {busy ? 'Sending...' : 'PRINT'}
+        Review &amp; Print
       </button>
 
       <div className="status-line">

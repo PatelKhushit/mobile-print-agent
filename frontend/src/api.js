@@ -91,7 +91,7 @@ export async function uploadPdf(file, onProgress) {
   return data; // { success, fileUrl, fileName, fileSize }
 }
 
-export async function createPrintJob({ printerId, fileUrl, copies, color, paperSize, duplex }) {
+export async function createPrintJob({ printerId, fileUrl, copies, color, paperSize, orientation, duplex }) {
   const idempotencyKey =
     (window.crypto?.randomUUID && window.crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
   const { data } = await client.post('/api/print-jobs', {
@@ -100,6 +100,7 @@ export async function createPrintJob({ printerId, fileUrl, copies, color, paperS
     copies,
     color,
     paperSize,
+    orientation,
     duplex,
     idempotencyKey,
   });
@@ -177,9 +178,14 @@ export async function getMyShopPrinters() {
   return data.printers;
 }
 
-export async function getMyShopAgent() {
-  const { data } = await client.get('/api/shop/agent');
-  return data.agent;
+export async function getMyShopAgents() {
+  const { data } = await client.get('/api/shop/agents');
+  return data.agents;
+}
+
+export async function generateAgentPairingCode() {
+  const { data } = await client.post('/api/shop/agent/pairing-code');
+  return data; // { success, pairingCode, expiresAt }
 }
 
 export async function getMyShopJobs(limit = 50) {
@@ -216,7 +222,7 @@ export async function uploadPdfAsCustomer(file, onProgress) {
   return data;
 }
 
-export async function createShopPrintJob({ printerId, fileUrl, copies, color, paperSize, duplex }) {
+export async function createShopPrintJob({ printerId, fileUrl, copies, color, paperSize, orientation, duplex }) {
   const idempotencyKey =
     (window.crypto?.randomUUID && window.crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
   const { data } = await customerClient.post('/api/print-jobs', {
@@ -225,6 +231,7 @@ export async function createShopPrintJob({ printerId, fileUrl, copies, color, pa
     copies,
     color,
     paperSize,
+    orientation,
     duplex,
     idempotencyKey,
   });
