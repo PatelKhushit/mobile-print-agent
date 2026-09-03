@@ -18,6 +18,7 @@ const printersRouter = require('./routes/printers');
 const printJobsRouter = require('./routes/printJobs');
 const authRouter = require('./routes/auth');
 const filesRouter = require('./routes/files');
+const { adminRouter: shopsAdminRouter, publicRouter: shopsPublicRouter, ownerRouter: shopOwnerRouter } = require('./routes/shops');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 fs.mkdirSync(PUBLIC_DIR, { recursive: true });
@@ -62,6 +63,9 @@ app.use('/api/printers', printersRouter);
 app.use('/api/upload', uploadRouter);
 app.use('/api/files', filesRouter);
 app.use('/api/print-jobs', printJobsRouter);
+app.use('/api/admin/shops', shopsAdminRouter);
+app.use('/api/shops', shopsPublicRouter);
+app.use('/api/shop', shopOwnerRouter);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, error: 'Not found.' });

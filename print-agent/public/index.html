@@ -86,6 +86,7 @@
   <div class="panel">
     <h1>REMOTE PRINT AGENT</h1>
     <div class="row"><span class="label">Agent ID</span><span class="value" id="agentId">-</span></div>
+    <div class="row"><span class="label">Shop</span><span class="value" id="shopId">-</span></div>
     <div class="row"><span class="label">Cloud</span><span class="value"><span class="dot gray" id="backendDot"></span><span id="backendText">-</span></span></div>
     <div class="row"><span class="label">Last Check</span><span class="value" id="lastCheck">-</span></div>
     <div class="row"><span class="label">Last Job</span><span class="value" id="lastJob">-</span></div>
@@ -108,6 +109,7 @@ async function refreshStatus() {
   const res = await fetch('/api/status');
   const s = await res.json();
   document.getElementById('agentId').textContent = s.agentId || '(not set)';
+  document.getElementById('shopId').textContent = s.shopId || 'Standalone (no shop)';
   document.getElementById('backendDot').className = 'dot ' + (s.backendConnected ? 'green' : 'red');
   document.getElementById('backendText').textContent = s.backendConnected ? 'Connected' : 'Disconnected';
   document.getElementById('lastCheck').textContent = s.lastCheck ? new Date(s.lastCheck).toLocaleTimeString() : '-';

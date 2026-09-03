@@ -5,8 +5,8 @@ const config = require('../src/config');
 const printQueue = require('../services/printQueue');
 const { agentAuth, jwtAuth, requireAdmin } = require('../middleware/auth');
 const logger = require('../src/utils/logger');
+const { computeStatus, publicPrinter } = require('../services/printerStatus');
 
-const ONLINE_WINDOW_MS = 90000; // agent heartbeats every ~5s; generous margin
 const SUPPORTED_PROTOCOLS = ['windows', 'ipp', 'ipps'];
 
 const router = express.Router();
@@ -47,6 +47,9 @@ router.post('/register', agentAuth, async (req, res) => {
         brand: brand || 'Unknown',
         model: model || 'Unknown',
         agentId: req.agentId,
+        // Denormalized from the agent, not the request body - a printer can
+        // never claim a shop the agent itself isn't paired with.
+        shopId: req.agent.shopId || null,
         localPrinterName,
         protocol: protocol || 'windows',
         address: address || null,
@@ -92,6 +95,7 @@ router.post('/sync', agentAuth, async (req, res) => {
           brand: brand || 'Unknown',
           model: model || 'Unknown',
           agentId: req.agentId,
+          shopId: req.agent.shopId || null,
           localPrinterName,
           protocol: protocol || 'windows',
           address: address || null,
@@ -110,32 +114,9 @@ router.post('/sync', agentAuth, async (req, res) => {
   res.json({ success: true, synced: results });
 });
 
-async function computeStatus(printer, agentsById) {
-  if (printer.status === 'disabled') return 'disabled';
-  const agent = agentsById.get(printer.agentId);
-  const agentOnline = !!(agent && agent.lastSeenAt && Date.now() - agent.lastSeenAt.getTime() < ONLINE_WINDOW_MS);
-  if (!agentOnline) return 'offline';
-  if (!agent.printers.includes(printer.localPrinterName)) return 'unavailable';
-  return 'online';
-}
-
-function publicPrinter(p, status) {
-  return {
-    printerId: p.printerId,
-    name: p.name,
-    brand: p.brand,
-    model: p.model,
-    location: p.location,
-    agentId: p.agentId,
-    protocol: p.protocol,
-    capabilities: p.capabilities,
-    status,
-  };
-}
-
-// GET /api/printers - mobile printer picker
+// GET /api/printers - mobile printer picker (legacy, standalone printers only)
 router.get('/', async (req, res) => {
-  const printers = await Printer.find({ status: { $ne: 'disabled' } }).lean();
+  const printers = await Printer.find({ status: { $ne: 'disabled' }, shopId: null }).lean();
   const agentIds = [...new Set(printers.map((p) => p.agentId))];
   const agents = await Agent.find({ agentId: { $in: agentIds } }).lean();
   const agentsById = new Map(agents.map((a) => [a.agentId, a]));
@@ -176,6 +157,7 @@ router.get('/admin/all', jwtAuth, requireAdmin, async (req, res) => {
   const result = await Promise.all(
     printers.map(async (p) => ({
       ...publicPrinter(p, await computeStatus(p, agentsById)),
+      shopId: p.shopId,
       localPrinterName: p.localPrinterName,
       address: p.address,
     }))
@@ -207,10 +189,16 @@ router.delete('/:printerId', jwtAuth, requireAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
-// POST /api/printers/:printerId/test-print - real job, real print, from the admin panel
-router.post('/:printerId/test-print', jwtAuth, requireAdmin, async (req, res) => {
+// POST /api/printers/:printerId/test-print - real job, real print, from the
+// admin panel or a shop owner's own dashboard (never someone else's shop).
+router.post('/:printerId/test-print', jwtAuth, async (req, res) => {
   const printer = await Printer.findOne({ printerId: req.params.printerId });
   if (!printer) return res.status(404).json({ success: false, error: 'Printer not found.' });
+
+  const isOwnShopPrinter = req.user.role === 'shop_owner' && printer.shopId && printer.shopId === req.user.shopId;
+  if (req.user.role !== 'admin' && !isOwnShopPrinter) {
+    return res.status(403).json({ success: false, error: 'You can only test-print your own shop\'s printers.' });
+  }
 
   const job = await printQueue.createJob({
     printerId: printer.printerId,

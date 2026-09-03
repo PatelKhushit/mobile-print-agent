@@ -8,7 +8,29 @@ const STATUS_LABEL = {
   offline: '🔴 Offline',
 };
 
-export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettings, onOpenCompatibility }) {
+/**
+ * Doubles as both the legacy personal-use print form (default props - a
+ * logged-in user, any standalone printer, an auto-generated sample PDF if
+ * they skip picking a file) and the shop QR customer print page (injected
+ * shop-scoped fetch/upload/submit functions, a real file required - spec
+ * section 32/83). Sharing one component keeps the actual print flow - the
+ * part that must never behave differently for the two audiences - in
+ * exactly one place.
+ */
+export default function PrintTest({
+  onLogout,
+  isAdmin,
+  onOpenAdmin,
+  onOpenSettings,
+  onOpenCompatibility,
+  title = 'REMOTE PRINT',
+  subtitle = null,
+  fetchPrinters = getAvailablePrinters,
+  uploadFile = uploadPdf,
+  submitJob = createPrintJob,
+  allowSamplePdf = true,
+  showFooterLinks = true,
+}) {
   const [printerId, setPrinterId] = useState('');
   const [printers, setPrinters] = useState([]);
   const [printersLoaded, setPrintersLoaded] = useState(false);
@@ -26,7 +48,7 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
     let cancelled = false;
     async function loadPrinters() {
       try {
-        const list = await getAvailablePrinters();
+        const list = await fetchPrinters();
         if (cancelled) return;
         setPrinters(list);
         setPrinterId((current) => {
@@ -78,13 +100,17 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
       setStatus('Select a printer first.');
       return;
     }
+    if (!file && !allowSamplePdf) {
+      setStatus('Select a PDF to print.');
+      return;
+    }
     setBusy(true);
     setStatus('Waiting...');
     try {
       let fileUrl;
       if (file) {
         setStatus('Uploading PDF...');
-        const result = await uploadPdf(file);
+        const result = await uploadFile(file);
         fileUrl = result.fileUrl;
       } else {
         setStatus('Preparing test PDF...');
@@ -92,7 +118,7 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
       }
 
       setStatus('Creating print job...');
-      const result = await createPrintJob({
+      const result = await submitJob({
         printerId,
         fileUrl,
         copies,
@@ -113,7 +139,8 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
   if (jobId) {
     return (
       <div className="card">
-        <h1>REMOTE PRINT</h1>
+        <h1>{title}</h1>
+        {subtitle && <div className="hint">{subtitle}</div>}
         <JobStatus jobId={jobId} onReset={reset} />
       </div>
     );
@@ -121,7 +148,8 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
 
   return (
     <div className="card">
-      <h1>REMOTE PRINT</h1>
+      <h1>{title}</h1>
+      {subtitle && <div className="hint">{subtitle}</div>}
 
       <label className="field">
         <span>Printer</span>
@@ -218,13 +246,15 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
           accept="application/pdf"
           onChange={(e) => setFile(e.target.files?.[0] || null)}
         />
-        {!file && <small>No file selected - a generated test PDF will be used.</small>}
+        {!file && (
+          <small>{allowSamplePdf ? 'No file selected - a generated test PDF will be used.' : 'Select the PDF you want printed.'}</small>
+        )}
       </label>
 
       <button
         className="primary-btn"
         onClick={handleTestPrint}
-        disabled={busy || !printerId || selectedPrinter?.status !== 'online'}
+        disabled={busy || !printerId || selectedPrinter?.status !== 'online' || (!file && !allowSamplePdf)}
       >
         {busy ? 'Sending...' : 'PRINT'}
       </button>
@@ -233,22 +263,24 @@ export default function PrintTest({ onLogout, isAdmin, onOpenAdmin, onOpenSettin
         <span className="label">Status:</span> {status}
       </div>
 
-      <div className="footer-links">
-        {isAdmin && (
-          <button className="link-btn" onClick={onOpenAdmin}>
-            Manage Printers
+      {showFooterLinks && (
+        <div className="footer-links">
+          {isAdmin && (
+            <button className="link-btn" onClick={onOpenAdmin}>
+              Manage Printers
+            </button>
+          )}
+          <button className="link-btn" onClick={onOpenSettings}>
+            Settings
           </button>
-        )}
-        <button className="link-btn" onClick={onOpenSettings}>
-          Settings
-        </button>
-        <button className="link-btn" onClick={onOpenCompatibility}>
-          Printer Compatibility
-        </button>
-        <button className="link-btn" onClick={onLogout}>
-          Sign out
-        </button>
-      </div>
+          <button className="link-btn" onClick={onOpenCompatibility}>
+            Printer Compatibility
+          </button>
+          <button className="link-btn" onClick={onLogout}>
+            Sign out
+          </button>
+        </div>
+      )}
     </div>
   );
 }

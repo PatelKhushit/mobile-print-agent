@@ -3,6 +3,11 @@ import axios from 'axios';
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 const TOKEN_KEY = 'printSystemAuthToken';
 const USER_KEY = 'printSystemUser';
+// Deliberately a separate storage key from TOKEN_KEY/USER_KEY above - a
+// customer QR session and a shop-owner/admin login must never collide if
+// both happen to exist in the same browser (spec section 73: customer
+// never needs a login at all, so it gets its own independent credential).
+const CUSTOMER_TOKEN_KEY = 'printSystemCustomerSession';
 
 const client = axios.create({ baseURL: BACKEND_URL, timeout: 15000 });
 
@@ -11,6 +16,23 @@ client.interceptors.request.use((cfg) => {
   if (token) cfg.headers.Authorization = `Bearer ${token}`;
   return cfg;
 });
+
+// Used only by the QR customer print flow - never carries a mobile-user JWT.
+const customerClient = axios.create({ baseURL: BACKEND_URL, timeout: 15000 });
+
+customerClient.interceptors.request.use((cfg) => {
+  const token = getCustomerToken();
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
+  return cfg;
+});
+
+export function getCustomerToken() {
+  return sessionStorage.getItem(CUSTOMER_TOKEN_KEY);
+}
+
+export function setCustomerToken(token) {
+  sessionStorage.setItem(CUSTOMER_TOKEN_KEY, token);
+}
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -120,6 +142,92 @@ export async function adminDeletePrinter(printerId) {
 
 export async function adminTestPrint(printerId) {
   const { data } = await client.post(`/api/printers/${printerId}/test-print`);
+  return data; // { success, jobId, status }
+}
+
+// --- Super admin: shops -----------------------------------------------
+export async function adminListShops() {
+  const { data } = await client.get('/api/admin/shops');
+  return data.shops;
+}
+
+export async function adminCreateShop(fields) {
+  const { data } = await client.post('/api/admin/shops', fields);
+  return data.shop;
+}
+
+export async function adminUpdateShop(shopId, fields) {
+  const { data } = await client.patch(`/api/admin/shops/${shopId}`, fields);
+  return data.shop;
+}
+
+export async function adminRegenerateShopQr(shopId) {
+  const { data } = await client.post(`/api/admin/shops/${shopId}/qr/regenerate`);
+  return data; // { success, qrUrl, qrDataUrl }
+}
+
+// --- Shop owner self-service --------------------------------------------
+export async function getMyShop() {
+  const { data } = await client.get('/api/shop/me');
+  return data; // { shop, qrUrl, qrDataUrl }
+}
+
+export async function getMyShopPrinters() {
+  const { data } = await client.get('/api/shop/printers');
+  return data.printers;
+}
+
+export async function getMyShopAgent() {
+  const { data } = await client.get('/api/shop/agent');
+  return data.agent;
+}
+
+export async function getMyShopJobs(limit = 50) {
+  const { data } = await client.get('/api/shop/jobs', { params: { limit } });
+  return data.jobs;
+}
+
+// --- Customer QR print flow (uses its own session token, see customerClient) ---
+export async function getShopPublicInfo(shopId, qrToken) {
+  const { data } = await client.get(`/api/shops/${shopId}/public`, { params: { t: qrToken } });
+  return data; // { shopId, shopName }
+}
+
+export async function startCustomerSession(shopId, qrToken) {
+  const { data } = await client.post(`/api/shops/${shopId}/session`, { t: qrToken });
+  setCustomerToken(data.token);
+  return data; // { token, shopName, expiresIn }
+}
+
+export async function getShopPrinters(shopId) {
+  const { data } = await customerClient.get(`/api/shops/${shopId}/printers`);
+  return data.printers;
+}
+
+export async function uploadPdfAsCustomer(file, onProgress) {
+  const form = new FormData();
+  form.append('file', file);
+  const { data } = await customerClient.post('/api/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (evt) => {
+      if (onProgress && evt.total) onProgress(Math.round((evt.loaded / evt.total) * 100));
+    },
+  });
+  return data;
+}
+
+export async function createShopPrintJob({ printerId, fileUrl, copies, color, paperSize, duplex }) {
+  const idempotencyKey =
+    (window.crypto?.randomUUID && window.crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
+  const { data } = await customerClient.post('/api/print-jobs', {
+    printerId,
+    fileUrl,
+    copies,
+    color,
+    paperSize,
+    duplex,
+    idempotencyKey,
+  });
   return data; // { success, jobId, status }
 }
 

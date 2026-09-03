@@ -27,6 +27,8 @@ async function createJob({
   orientation,
   duplex,
   userId,
+  shopId,
+  customerSessionId,
   idempotencyKey,
 }) {
   if (idempotencyKey) {
@@ -46,6 +48,8 @@ async function createJob({
     orientation: orientation || 'portrait',
     duplex: !!duplex,
     userId: userId || null,
+    shopId: shopId || null,
+    customerSessionId: customerSessionId || null,
     // Omit entirely rather than passing null - see the schema comment on
     // why that matters for the sparse unique index.
     ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -175,12 +179,16 @@ async function markFailed(jobId, agentId, errorMessage) {
  * admin) - but only while it's still safe to do so. Once an agent has
  * told us it's actively printing, cancelling is refused rather than
  * pretending to stop a page that may already be coming out of the
- * printer (spec: never fake a result).
+ * printer (spec: never fake a result). "Owns" covers either a logged-in
+ * user's own jobs or a customer session's own guest-submitted job.
  */
-async function cancelJob(jobId, requesterId, isAdmin) {
+async function cancelJob(jobId, { requesterUserId, requesterSessionId, isAdmin } = {}) {
   const job = await PrintJob.findOne({ jobId });
   if (!job) return { error: 'not_found' };
-  if (!isAdmin && (!job.userId || job.userId.toString() !== requesterId)) {
+  const ownsAsUser = requesterUserId && job.userId && job.userId.toString() === requesterUserId;
+  const ownsAsCustomer =
+    requesterSessionId && job.customerSessionId && job.customerSessionId === requesterSessionId;
+  if (!isAdmin && !ownsAsUser && !ownsAsCustomer) {
     return { error: 'forbidden' };
   }
   if (!['queued', 'assigned', 'downloading'].includes(job.status)) {

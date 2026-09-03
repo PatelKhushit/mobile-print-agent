@@ -28,8 +28,8 @@ async function ensureRegistered() {
   if (!cfg.agentId) {
     throw new Error('PRINT_AGENT_ID is not set in .env');
   }
-  logger.log(`Registering agent "${cfg.agentId}" with backend...`);
-  const result = await cloud.register(cfg.agentId, cfg.agentId);
+  logger.log(`Registering agent "${cfg.agentId}"${cfg.shopId ? ` (shop ${cfg.shopId})` : ''} with backend...`);
+  const result = await cloud.register(cfg.agentId, cfg.agentId, cfg.shopId);
   saveEnvValue('PRINT_AGENT_TOKEN', result.token);
   cfg = readConfig();
   logger.log('Agent registered and token saved to .env');

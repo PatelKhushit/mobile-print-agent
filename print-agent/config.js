@@ -15,6 +15,10 @@ function readConfig() {
   return {
     backendUrl: (process.env.BACKEND_URL || 'http://localhost:4000').replace(/\/+$/, ''),
     agentId: process.env.PRINT_AGENT_ID || '',
+    // Optional. Pairs this agent to a shop created by the platform owner -
+    // leave unset for the legacy standalone/personal-use behavior (default,
+    // and how this real PC's existing agent keeps working untouched).
+    shopId: process.env.SHOP_ID || null,
     // Issued by POST /api/agents/register on first run and persisted here -
     // never hand-set. See agent.js ensureRegistered().
     agentToken: process.env.PRINT_AGENT_TOKEN || '',

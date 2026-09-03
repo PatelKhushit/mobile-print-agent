@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const Agent = require('../models/Agent');
 const Printer = require('../models/Printer');
+const Shop = require('../models/Shop');
 const { agentAuth, jwtAuth, requireAdmin } = require('../middleware/auth');
 const logger = require('../src/utils/logger');
 
@@ -17,22 +18,38 @@ const router = express.Router();
  * The plaintext token is only ever shown in this response, never stored.
  */
 router.post('/register', async (req, res) => {
-  const { agentId, name } = req.body || {};
+  const { agentId, name, shopId } = req.body || {};
   if (!agentId || typeof agentId !== 'string') {
     return res.status(400).json({ success: false, error: 'agentId is required.' });
+  }
+
+  // Absent shopId = legacy standalone agent, unchanged behavior. Present
+  // shopId must reference a real, active shop - an agent can't pair itself
+  // to a shop that doesn't exist or has been suspended.
+  if (shopId) {
+    const shop = await Shop.findOne({ shopId });
+    if (!shop) return res.status(404).json({ success: false, error: `Shop "${shopId}" not found.` });
+    if (shop.status !== 'active') {
+      return res.status(403).json({ success: false, error: `Shop "${shopId}" is not active.` });
+    }
   }
 
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = await bcrypt.hash(token, 10);
 
-  const agent = await Agent.findOneAndUpdate(
-    { agentId },
-    { agentId, name: name || agentId, tokenHash, status: 'offline' },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
+  const update = { agentId, name: name || agentId, tokenHash, status: 'offline' };
+  // Only touch shopId when the caller actually supplied one - re-registering
+  // without SHOP_ID set must never silently unpair an already-paired agent.
+  if (shopId) update.shopId = shopId;
 
-  logger.info(`[agents] Registered ${agent.agentId} (token rotated)`);
-  res.json({ success: true, agentId: agent.agentId, token });
+  const agent = await Agent.findOneAndUpdate({ agentId }, update, {
+    upsert: true,
+    new: true,
+    setDefaultsOnInsert: true,
+  });
+
+  logger.info(`[agents] Registered ${agent.agentId} (token rotated)${agent.shopId ? `, shop=${agent.shopId}` : ''}`);
+  res.json({ success: true, agentId: agent.agentId, shopId: agent.shopId, token });
 });
 
 /**

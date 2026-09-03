@@ -6,12 +6,14 @@ function authHeaders(cfg) {
   return { 'X-Agent-Id': cfg.agentId, 'X-Agent-Secret': cfg.agentToken };
 }
 
-async function register(agentId, name) {
+async function register(agentId, name, shopId) {
   const cfg = readConfig();
-  const { data } = await axios.post(`${cfg.backendUrl}/api/agents/register`, { agentId, name }, {
-    timeout: cfg.requestTimeout,
-  });
-  return data; // { success, agentId, token }
+  const { data } = await axios.post(
+    `${cfg.backendUrl}/api/agents/register`,
+    { agentId, name, ...(shopId ? { shopId } : {}) },
+    { timeout: cfg.requestTimeout }
+  );
+  return data; // { success, agentId, shopId, token }
 }
 
 async function heartbeat(printers, version) {

@@ -59,4 +59,64 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { agentAuth, jwtAuth, requireAdmin };
+/** Gate for shop-owner endpoints. Must run after jwtAuth. */
+function requireShopOwner(req, res, next) {
+  if (!req.user || req.user.role !== 'shop_owner' || !req.user.shopId) {
+    return res.status(403).json({ success: false, error: 'Shop owner access required.' });
+  }
+  next();
+}
+
+/**
+ * Verifies a customer's short-lived guest session, issued by
+ * POST /api/shops/:shopId/session after a QR scan (spec section 72). Same
+ * jwt.verify() mechanism as jwtAuth, but a distinctly-shaped, short-expiry
+ * payload so a customer token can never be mistaken for (or reused as) a
+ * mobile-user login token.
+ */
+function customerSessionAuth(req, res, next) {
+  const header = req.header('Authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'Print session required - please scan the shop QR code again.' });
+  }
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (payload.type !== 'customer' || !payload.shopId || !payload.sid) {
+      throw new Error('not a customer session token');
+    }
+    req.customerSession = payload;
+    next();
+  } catch {
+    res.status(401).json({ success: false, error: 'Print session expired - please scan the shop QR code again.' });
+  }
+}
+
+/**
+ * Accepts either a logged-in user (mobile JWT) or a QR customer session,
+ * normalizing both into req.actor so routes shared between the legacy
+ * personal-print flow and the new shop QR flow (e.g. print job creation)
+ * don't need two copies of the same handler.
+ */
+function eitherAuth(req, res, next) {
+  const header = req.header('Authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'Authentication required.' });
+  }
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (payload.type === 'customer' && payload.shopId && payload.sid) {
+      req.customerSession = payload;
+      req.actor = { type: 'customer', shopId: payload.shopId, userId: null };
+    } else {
+      req.user = payload;
+      req.actor = { type: 'user', shopId: payload.shopId || null, userId: payload.sub };
+    }
+    next();
+  } catch {
+    res.status(401).json({ success: false, error: 'Invalid or expired session.' });
+  }
+}
+
+module.exports = { agentAuth, jwtAuth, requireAdmin, requireShopOwner, customerSessionAuth, eitherAuth };

@@ -4,6 +4,9 @@ const config = {
   port: parseInt(process.env.PORT, 10) || 4000,
   nodeEnv: process.env.NODE_ENV || 'development',
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || 'http://localhost:4000').replace(/\/+$/, ''),
+  // Where the customer-facing web app lives - used only to build the URL
+  // encoded into a shop's QR code (spec section 6), never for API calls.
+  frontendBaseUrl: (process.env.FRONTEND_BASE_URL || 'http://localhost:5173').replace(/\/+$/, ''),
   corsOrigin: process.env.CORS_ORIGIN || '*',
   mongodbUri: process.env.MONGODB_URI || '',
   maxFileSizeMb: parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 10,

@@ -26,6 +26,7 @@ function startDashboard({ getConfig, state, getCachedPrinters }) {
     const cfg = getConfig();
     res.json({
       agentId: cfg.agentId,
+      shopId: cfg.shopId || null,
       backendUrl: cfg.backendUrl,
       backendConnected: state.backendConnected,
       printers: getCachedPrinters(),

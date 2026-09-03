@@ -3,6 +3,11 @@ const mongoose = require('mongoose');
 const printerSchema = new mongoose.Schema(
   {
     printerId: { type: String, required: true, unique: true },
+    // Denormalized from the owning agent's shopId at register/sync time
+    // (routes/printers.js) so shop-scoped queries never need a join, and so
+    // multi-shop isolation (spec section 45) is a single filter, not a
+    // lookup. null = legacy standalone printer, not part of any shop.
+    shopId: { type: String, default: null },
     name: { type: String, required: true },
     brand: { type: String, default: 'Unknown' },
     model: { type: String, default: 'Unknown' },

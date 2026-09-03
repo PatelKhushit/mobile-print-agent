@@ -7,13 +7,15 @@ const { jwtAuth } = require('../middleware/auth');
 const router = express.Router();
 
 function issueToken(user) {
-  return jwt.sign({ sub: user._id.toString(), email: user.email, role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: '30d',
-  });
+  return jwt.sign(
+    { sub: user._id.toString(), email: user.email, role: user.role, shopId: user.shopId || null },
+    process.env.JWT_SECRET,
+    { expiresIn: '30d' }
+  );
 }
 
 function publicUser(user) {
-  return { email: user.email, name: user.name, role: user.role };
+  return { email: user.email, name: user.name, role: user.role, shopId: user.shopId || null };
 }
 
 /**

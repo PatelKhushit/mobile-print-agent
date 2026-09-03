@@ -6,7 +6,7 @@ const PrintJob = require('../models/PrintJob');
 const AuditLog = require('../models/AuditLog');
 const User = require('../models/User');
 const printQueue = require('../services/printQueue');
-const { agentAuth, jwtAuth, requireAdmin } = require('../middleware/auth');
+const { agentAuth, jwtAuth, requireAdmin, eitherAuth } = require('../middleware/auth');
 const logger = require('../src/utils/logger');
 
 const router = express.Router();
@@ -18,8 +18,11 @@ router.get('/admin/audit-log', jwtAuth, requireAdmin, async (req, res) => {
   res.json({ success: true, entries });
 });
 
-// POST /api/print-jobs - mobile creates a print job (requires login)
-router.post('/', jwtAuth, async (req, res) => {
+// POST /api/print-jobs - creates a print job. Accepts either a logged-in
+// mobile user (legacy personal flow, unrestricted, exactly as before) or a
+// QR customer session (spec section 35) - eitherAuth normalizes both into
+// req.actor.
+router.post('/', eitherAuth, async (req, res) => {
   const { printerId, fileUrl, copies, color, paperSize, orientation, duplex, idempotencyKey } = req.body || {};
 
   if (!fileUrl || typeof fileUrl !== 'string' || !/^https?:\/\//i.test(fileUrl)) {
@@ -32,6 +35,13 @@ router.post('/', jwtAuth, async (req, res) => {
   const printer = await Printer.findOne({ printerId });
   if (!printer || printer.status === 'disabled') {
     return res.status(404).json({ success: false, error: 'Printer not found.' });
+  }
+
+  // Mandatory isolation (spec section 45): a customer session may only ever
+  // submit to the shop it scanned into, checked here server-side regardless
+  // of what printerId the client sends - never trust the frontend for this.
+  if (req.actor.type === 'customer' && printer.shopId !== req.actor.shopId) {
+    return res.status(403).json({ success: false, error: 'This printer does not belong to your shop session.' });
   }
 
   let copiesNum = parseInt(copies, 10);
@@ -61,7 +71,9 @@ router.post('/', jwtAuth, async (req, res) => {
     paperSize,
     orientation,
     duplex: !!duplex,
-    userId: req.user.sub,
+    userId: req.actor.type === 'user' ? req.actor.userId : null,
+    shopId: printer.shopId || null,
+    customerSessionId: req.actor.type === 'customer' ? req.customerSession.sid : null,
     idempotencyKey: idempotencyKey || null,
   });
 
@@ -118,9 +130,14 @@ router.post('/:jobId/claim', agentAuth, async (req, res) => {
   res.json({ success: true, jobId: job.jobId, status: job.status });
 });
 
-// POST /api/print-jobs/:jobId/cancel - mobile cancels its own job (or admin cancels any)
-router.post('/:jobId/cancel', jwtAuth, async (req, res) => {
-  const result = await printQueue.cancelJob(req.params.jobId, req.user.sub, req.user.role === 'admin');
+// POST /api/print-jobs/:jobId/cancel - the submitter (logged-in user or the
+// customer session that created it) cancels their own job, or an admin cancels any
+router.post('/:jobId/cancel', eitherAuth, async (req, res) => {
+  const result = await printQueue.cancelJob(req.params.jobId, {
+    requesterUserId: req.actor.type === 'user' ? req.actor.userId : null,
+    requesterSessionId: req.actor.type === 'customer' ? req.customerSession.sid : null,
+    isAdmin: req.actor.type === 'user' && req.user.role === 'admin',
+  });
   if (result.error === 'not_found') return res.status(404).json({ success: false, error: 'Job not found.' });
   if (result.error === 'forbidden') {
     return res.status(403).json({ success: false, error: 'You can only cancel your own print jobs.' });
@@ -132,10 +149,11 @@ router.post('/:jobId/cancel', jwtAuth, async (req, res) => {
   }
 
   const printer = await Printer.findOne({ printerId: result.job.printerId }).lean();
+  const cancelledBy = req.actor.type === 'user' ? req.user.email : 'customer session';
   await AuditLog.create({
     jobId: result.job.jobId,
     userId: result.job.userId,
-    userEmail: req.user.email,
+    userEmail: req.actor.type === 'user' ? req.user.email : null,
     printerId: result.job.printerId,
     printerName: printer ? printer.name : result.job.printerId,
     agentId: result.job.agentId,
@@ -143,7 +161,7 @@ router.post('/:jobId/cancel', jwtAuth, async (req, res) => {
     status: 'cancelled',
   });
 
-  logger.info(`[print-jobs] ${result.job.jobId} cancelled by ${req.user.email}`);
+  logger.info(`[print-jobs] ${result.job.jobId} cancelled by ${cancelledBy}`);
   res.json({ success: true, jobId: result.job.jobId, status: result.job.status });
 });
 

@@ -6,6 +6,13 @@ const printJobSchema = new mongoose.Schema(
   {
     jobId: { type: String, required: true, unique: true },
     printerId: { type: String, required: true },
+    // null for legacy jobs created outside any shop context. Set from the
+    // printer's shopId at creation time (routes/printJobs.js), never
+    // trusted from the client.
+    shopId: { type: String, default: null },
+    // Set when a guest/customer (not a logged-in user) submitted this job
+    // via the QR flow - see customerSessionAuth in middleware/auth.js.
+    customerSessionId: { type: String, default: null },
     // Set once a job is assigned - null while queued and eligible for any
     // agent that serves printerId.
     agentId: { type: String, default: null },

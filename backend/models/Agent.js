@@ -3,6 +3,10 @@ const mongoose = require('mongoose');
 const agentSchema = new mongoose.Schema(
   {
     agentId: { type: String, required: true, unique: true },
+    // null = legacy standalone agent (pre-multi-shop), behaves exactly as
+    // before. Set once, at registration, when the agent's .env carries a
+    // SHOP_ID - see print-agent/config.js.
+    shopId: { type: String, default: null },
     name: { type: String, default: '' },
     // Never store the plaintext token - only its hash, so a DB leak alone
     // can't be used to impersonate an agent.
