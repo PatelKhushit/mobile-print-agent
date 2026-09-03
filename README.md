@@ -191,6 +191,62 @@ Any admin account sees a **Manage Printers** link on the mobile page:
 rename, disable/enable, delete, or trigger a real test print on any
 registered printer, across every agent/location.
 
+## Multi-shop mode (optional)
+
+Everything above still works exactly as described - it's the personal/
+single-tenant mode, and nothing about it changes unless you opt into
+shops. Multi-shop mode adds a tenancy layer on top for running this as a
+service across multiple Xerox/printing shops, each with its own QR code,
+printers, and isolated data.
+
+```text
+Super Admin (you)
+      │ creates shops
+      ▼
+   Shop (own QR code, own owner login, own printers/jobs)
+      │
+      ├── Print Agent, paired via SHOP_ID
+      │        └── that shop's printers only
+      │
+      └── Customers scan the shop's QR → guest session → upload PDF →
+          print, scoped to that shop's printers only
+```
+
+**1. Create a shop** (super admin → **Shops** tab in the admin panel, or
+directly):
+
+```bash
+curl -X POST $BACKEND_URL/api/admin/shops \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"shopName":"Patel Xerox Center","ownerEmail":"owner@example.com","ownerPassword":"a-strong-password"}'
+```
+
+This creates the shop (`shopId` like `SHOP-001`) and a `shop_owner` login
+in one call. The shop owner signs in on the regular login page and lands
+on their own dashboard (QR download, printers, print history) instead of
+the personal print page.
+
+**2. Pair a Print Agent to that shop** - add one line to that agent's
+`print-agent/.env`:
+
+```text
+SHOP_ID=SHOP-001
+```
+
+then delete `PRINT_AGENT_TOKEN` from the same file and restart the agent
+to force re-registration under the shop. Leave `SHOP_ID` blank (the
+default) to keep an agent as personal/standalone - it never touches shop
+data either way. **A shop's printers, agent, and jobs are only ever
+visible to that shop's own dashboard, the super admin, and customers who
+scanned that shop's own QR** - enforced server-side, not just hidden in
+the UI.
+
+**3. Customers print without any login**: scanning the shop's QR opens
+`/print/shop/:shopId?t=<token>`, which exchanges the QR's token for a
+short-lived (2h) guest session, then shows only that shop's printers.
+Regenerating a shop's QR (super admin → Regenerate QR) invalidates old
+printed QR codes without touching the shop's printers/history.
+
 ## Troubleshooting
 
 | Message | Meaning | Fix |
