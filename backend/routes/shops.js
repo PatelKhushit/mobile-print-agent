@@ -255,6 +255,31 @@ ownerRouter.get('/printers', jwtAuth, requireShopOwner, async (req, res) => {
   res.json({ success: true, printers: result });
 });
 
+// PATCH /api/shop/printers/:printerId - the one thing a shop owner can
+// change about their own printer without admin involvement: whether
+// customers can select it at all (e.g. "out of paper", "being serviced").
+// Deliberately narrow - only `available` is accepted here. Renaming,
+// deleting, or reassigning a printer to a different agent stays
+// admin-only (PATCH /api/printers/:printerId, requireAdmin) - this route
+// can never do those things even if a caller sends the fields.
+ownerRouter.patch('/printers/:printerId', jwtAuth, requireShopOwner, async (req, res) => {
+  const { available } = req.body || {};
+  if (typeof available !== 'boolean') {
+    return res.status(400).json({ success: false, error: 'available (true/false) is required.' });
+  }
+
+  const printer = await Printer.findOne({ printerId: req.params.printerId });
+  if (!printer || printer.shopId !== req.user.shopId) {
+    return res.status(404).json({ success: false, error: 'Printer not found.' });
+  }
+
+  printer.status = available ? 'online' : 'disabled';
+  await printer.save();
+
+  logger.info(`[shops] ${printer.printerId} marked ${available ? 'available' : 'unavailable'} by shop owner (${req.user.shopId})`);
+  res.json({ success: true, printer: { printerId: printer.printerId, status: printer.status } });
+});
+
 // POST /api/shop/agent/pairing-code - generates a fresh single-use code
 // (spec section 45), replacing any code this shop previously generated.
 // The plaintext code is only ever shown here - the agent redeems and

@@ -40,6 +40,12 @@ router.post('/register', agentAuth, async (req, res) => {
   // name/location are admin-owned once a printer exists (spec section 32:
   // a custom display name must survive the agent's periodic re-sync) - set
   // only on first insert via $setOnInsert, never overwritten on repeat syncs.
+  // status works the same way once a printer has been explicitly marked
+  // "disabled" (admin) or made unavailable (shop owner - see PATCH
+  // /api/shop/printers/:printerId): that's a deliberate override, not a
+  // liveness signal, so a routine re-sync must never silently clear it.
+  const statusUpdate = existing && existing.status === 'disabled' ? {} : { status: 'online' };
+
   const printer = await Printer.findOneAndUpdate(
     { printerId },
     {
@@ -53,7 +59,7 @@ router.post('/register', agentAuth, async (req, res) => {
         localPrinterName,
         protocol: protocol || 'windows',
         address: address || null,
-        status: 'online',
+        ...statusUpdate,
         capabilities: capabilities || {},
         lastSeenAt: new Date(),
       },
@@ -88,6 +94,11 @@ router.post('/sync', agentAuth, async (req, res) => {
     const existing = await Printer.findOne({ printerId });
     if (existing && existing.agentId !== req.agentId) continue; // owned by another agent, skip rather than hijack
 
+    // See the matching comment in /register - "disabled" is a deliberate
+    // override and must survive routine re-syncs, not get reset to online
+    // every ~30s just because the agent still sees the printer in Windows.
+    const statusUpdate = existing && existing.status === 'disabled' ? {} : { status: 'online' };
+
     const printer = await Printer.findOneAndUpdate(
       { printerId },
       {
@@ -99,7 +110,7 @@ router.post('/sync', agentAuth, async (req, res) => {
           localPrinterName,
           protocol: protocol || 'windows',
           address: address || null,
-          status: 'online',
+          ...statusUpdate,
           capabilities: capabilities || {},
           lastSeenAt: new Date(),
         },

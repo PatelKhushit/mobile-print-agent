@@ -6,6 +6,7 @@ import {
   getMyShopAgents,
   getMyShopJobs,
   getMyShopPrinters,
+  setMyShopPrinterAvailable,
 } from '../api';
 import SetupWizard from './SetupWizard';
 
@@ -103,6 +104,18 @@ export default function ShopDashboard({ onBack }) {
       setMsg(`Test print job ${result.jobId} created.`);
     } catch (err) {
       setMsg(err.response?.data?.error || 'Test print failed.');
+    }
+  }
+
+  async function handleToggleAvailable(printer) {
+    const makeAvailable = printer.status === 'disabled';
+    try {
+      await setMyShopPrinterAvailable(printer.printerId, makeAvailable);
+      setPrinters((prev) =>
+        prev.map((p) => (p.printerId === printer.printerId ? { ...p, status: makeAvailable ? 'online' : 'disabled' } : p))
+      );
+    } catch (err) {
+      setMsg(err.response?.data?.error || 'Could not update printer availability.');
     }
   }
 
@@ -221,6 +234,9 @@ export default function ShopDashboard({ onBack }) {
                   <td>{PRINTER_STATUS_LABEL[p.status] || p.status}</td>
                   <td className="admin-actions">
                     <button onClick={() => handleTestPrint(p)}>Test Print</button>
+                    <button onClick={() => handleToggleAvailable(p)}>
+                      {p.status === 'disabled' ? 'Mark Available' : 'Mark Unavailable'}
+                    </button>
                   </td>
                 </tr>
               ))}

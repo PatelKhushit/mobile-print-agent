@@ -178,6 +178,11 @@ export async function getMyShopPrinters() {
   return data.printers;
 }
 
+export async function setMyShopPrinterAvailable(printerId, available) {
+  const { data } = await client.patch(`/api/shop/printers/${printerId}`, { available });
+  return data.printer;
+}
+
 export async function getMyShopAgents() {
   const { data } = await client.get('/api/shop/agents');
   return data.agents;
